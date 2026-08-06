@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "document-engine-benchmark"
-version = "0.1.0"
-description = "Local Document Extraction Engine Benchmark for Vietnamese Logistics Documents"
+name = "document-engine"
+version = "0.2.0"
+description = "Universal Invoice and Business Document Processing Engine"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -26,23 +26,12 @@ docling_ocr = [
     "docling>=2.0.0,<3.0.0",
     "easyocr>=1.7.0,<2.0.0",
 ]
-paddle = [
-    "paddlepaddle>=3.0.0,<4.0.0",
-    "paddleocr[doc-parser]>=3.0.0,<4.0.0",
-]
-paddle_legacy = [
-    "paddlepaddle>=2.5.0,<3.0.0",
-    "paddleocr>=2.7.0,<3.0.0",
-]
 paddle_vl = [
     "paddlepaddle>=3.0.0,<4.0.0",
     "paddleocr>=3.0.0,<4.0.0",
 ]
-sparrow = [
-    "ollama>=0.1.0",
-]
-gpu = [
-    "nvidia-ml-py>=12.535.133",
+ui = [
+    "streamlit>=1.30.0",
 ]
 dev = [
     "pytest>=7.4.0",
@@ -52,8 +41,7 @@ dev = [
 ]
 
 [project.scripts]
-document-benchmark = "document_benchmark.cli:main"
-document-smoke-benchmark = "document_benchmark.smoke.runner:main"
+document-engine = "document_engine.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

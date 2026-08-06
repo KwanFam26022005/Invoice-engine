@@ -1,142 +1,106 @@
-# Invoice Engine Benchmark
+# Universal Invoice and Business Document Engine
 
-Local-first benchmark for document extraction engines on Vietnamese invoices and internal PDF forms. The project measures extraction quality, latency, CPU/RAM/GPU usage, stability, validation outcomes, and batch-level financial aggregation.
+A local-first enterprise document intake, inspection, parser routing, deterministic validation, DuckDB persistence, and human review system designed for complex business documents (invoices, utility statements, port services, tax withholding certificates, receipts, and supporting statements).
 
-## Architecture
+## Features
+
+- **Local-First & Privacy Preserving**: Zero cloud API dependencies, zero remote network calls, no telemetry.
+- **Fast Non-OCR Inspection**: PyMuPDF-based intake inspector categorizing document profiles (`native_pdf`, `scan_pdf`, `mixed_pdf`, `invalid_pdf`) without OCR overhead.
+- **Profile-Aware Parser Routing**: Dispatches native PDFs to fast PyMuPDF/Docling native parsers, scanned documents to Docling OCR (EasyOCR), and handles difficult documents via PaddleOCR-VL fallback.
+- **Common Document IR**: Structured representation containing pages, blocks, tables, raw geometry, parser provenance, and deterministic IDs (`doc_<sha256[:16]>`, `{doc_id}_p0001`, `{page_id}_b00001`, `{page_id}_t001`).
+- **Family Classification**: Multi-anchor classifier identifying 7 distinct document families (`sales_invoice`, `utility_consumption_invoice`, `service_volume_invoice`, `port_service_invoice`, `receipt`, `tax_withholding_certificate`, `supporting_statement`) plus `unknown`.
+- **Typed Schemas & Normalization**: Discriminated Pydantic business models using `Decimal` money representations and deterministic Vietnamese date/tax ID/amount/container normalizers.
+- **Deterministic Validation**: Configurable tolerance financial and consumption calculations (`closing - opening * factor == consumption`).
+- **DuckDB Storage**: Idempotent DDL migrations storing relational projections, evidence references, and full JSON canonical payloads within isolated per-document transactions.
+- **Human Review Queue**: Built-in audit trail and correction manager for flagged or unknown documents.
+- **Multi-Sheet Excel Export**: `openpyxl`-based exporter generating clean workbooks with auto-filters, frozen panes, and formula injection sanitization (`=`, `+`, `-`, `@`).
+
+> [!NOTE]
+> **Accuracy Disclaimer**: Unknown or low-completeness document layouts are routed to the human review queue rather than silently accepted.
+
+---
+
+## Workspace Directory Structure
+
+All runtime artifacts are written to `DOCUMENT_ENGINE_HOME` (default: `D:\Documents-engine\workspace`):
 
 ```text
-PDF input
-  → input-profile inspection (native text or image-only scan)
-  → DocumentEngine registry
-  → isolated warm/cold worker
-  → raw engine output and runtime identity
-  → canonical normalization
-  → business validation
-  → evaluation and cross-engine comparison
-  → DuckDB aggregation
-  → Excel/CSV report
+workspace/
+├── inbox/
+├── database/
+│   └── document_engine.duckdb
+├── runs/
+├── exports/
+├── review/
+├── logs/
+└── cache/
 ```
 
-## Benchmark tracks
+---
 
-Engines are compared only within compatible input tracks:
+## Installation
 
-| Track | Input | Baseline profiles |
-|---|---|---|
-| `native_pdf` | PDF with a usable embedded text layer | `docling_text_only_cpu`, `docling_table_cpu` |
-| `scan_ocr` | Image-only/scanned PDF | `docling_ocr_easyocr_vi_cpu`, `ppstructure_v3_vi_table_cpu` |
-
-An incompatible engine/document pairing is recorded as `SKIPPED` before model loading. This prevents an OCR-disabled parser from being ranked against OCR-enabled pipelines on scanned PDFs.
-
-## Engine status
-
-- **Docling native profiles:** implemented.
-- **Docling EasyOCR Vietnamese profile:** implemented for scanned PDFs.
-- **PP-StructureV3:** implemented with the PaddleOCR 3.x `PPStructureV3` pipeline API.
-- **PP-StructureV2 legacy:** retained under an explicit, disabled legacy profile; it is never labelled as V3.
-- **PaddleOCR-VL and Sparrow:** planned optional adapters, not production-ready in the current repository.
-
-Every real-engine result records the concrete runtime class and installed package versions in `raw_payload.runtime_metadata`.
-
-## Base installation
-
-```powershell
-git clone https://github.com/KwanFam26022005/Invoice-engine.git
-cd Invoice-engine
+```bash
+# Install package in editable mode with development dependencies
 python -m pip install -e ".[dev]"
 ```
 
-## Optional engine environments
+---
 
-Keep heavyweight engines in separate virtual environments when dependencies conflict.
+## CLI Usage
 
-### Docling native parsing
+Initialize workspace:
 
-```powershell
-python -m pip install -e ".[docling,dev]"
+```bash
+document-engine init-workspace
 ```
 
-### Docling OCR
+Inspect PDF profile without OCR:
 
-```powershell
-python -m pip install -e ".[docling_ocr,dev]"
+```bash
+document-engine inspect "path/to/document.pdf"
 ```
 
-### PP-StructureV3
+Process single document end-to-end:
 
-PaddleOCR 3.x requires PaddlePaddle 3.x. Install the appropriate CPU or GPU PaddlePaddle wheel for the target machine first, then:
-
-```powershell
-python -m pip install -e ".[paddle,dev]"
+```bash
+document-engine process "path/to/document.pdf"
 ```
 
-### PP-StructureV2 legacy
+Process folder of PDFs:
 
-The legacy dependency group is intentionally separate and the profile is disabled by default:
-
-```powershell
-python -m pip install -e ".[paddle_legacy,dev]"
+```bash
+document-engine process-folder "path/to/pdf_folder"
 ```
 
-Do not install the V2 and V3 Paddle stacks into the same benchmark environment.
+List pending items in review queue:
 
-## Dataset preparation
-
-```powershell
-python scripts\prepare_benchmark_dataset.py `
-  --dataset-root "D:\Documents-engine\datasets"
+```bash
+document-engine review-list
 ```
 
-Read-only integrity verification:
+Export run results to Excel:
 
-```powershell
-python scripts\prepare_benchmark_dataset.py `
-  --dataset-root "D:\Documents-engine\datasets" `
-  --verify-only
+```bash
+document-engine export --run-id "run_20260806"
 ```
 
-The current local corpus contains 51 valid image-only PDFs. Raw PDFs, images, ZIP archives, OCR output, and generated benchmark runs are excluded from Git.
+---
 
-## Tests
+## Local Dashboard UI
 
-Base suite:
+Launch the Streamlit dashboard:
 
-```powershell
-python -m ruff check src tests scripts
-python -m compileall -q src tests scripts
-python -m pytest -v
+```bash
+python scripts/run_ui.py
 ```
 
-Heavy model extraction tests are explicit opt-in tests:
+---
 
-```powershell
-$env:RUN_OPTIONAL_ENGINE_TESTS = "1"
-python -m pytest -m optional_engine -v
+## Archival Note
+
+For the legacy engine benchmark implementation (v1.0.0), refer to [`docs/legacy/benchmark_v1.md`](docs/legacy/benchmark_v1.md) or checkout tag:
+
+```bash
+git checkout benchmark-v1.0.0
 ```
-
-Without that environment variable, optional model tests report `SKIPPED`; health checks and adapter contract tests still run without downloading model weights.
-
-## Example benchmark commands
-
-Scanned PDF track:
-
-```powershell
-python -m document_benchmark.cli `
-  --pdfs "D:\Documents-engine\datasets\benchmark\documents\utilities\sample.pdf" `
-  --engines docling_ocr_easyocr_vi_cpu ppstructure_v3_vi_table_cpu `
-  --warmup-runs 1 `
-  --measured-runs 3 `
-  --timeout 300
-```
-
-Native-text track:
-
-```powershell
-python -m document_benchmark.cli `
-  --pdfs "D:\path\to\native_text_invoice.pdf" `
-  --engines docling_text_only_cpu docling_table_cpu
-```
-
-## Security policy
-
-The application is local-only for this scope. It does not send documents to cloud APIs. Never commit invoice PDFs, document images, ZIP archives, model caches, extracted full text, or generated run artifacts.
