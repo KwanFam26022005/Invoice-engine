@@ -68,25 +68,22 @@ def test_smoke_campaign_runs_mock_and_generates_reports(tmp_path: Path) -> None:
     configs_dir = tmp_path / "configs"
     configs_dir.mkdir()
     (configs_dir / "mock_smoke.yaml").write_text(
-        "\n".join(
-            [
-                "engine_id: mock",
-                "engine_version: 1.0.0",
-                "config_id: mock_smoke_campaign",
-                "output_kind: document_ir",
-                "supports_pdf_text: true",
-                "supports_scanned_pdf: true",
-                "supports_tables: true",
-                "enabled: true",
-                "device: cpu",
-                "options:",
-                "  benchmark_track: scan_ocr",
-                "  prepare_delay_ms: 1",
-                "  extract_delay_ms: 1",
-                "  mock_family: invoice",
-            ]
-        )
-        + "\n",
+        (
+            "engine_id: mock\n"
+            "engine_version: 1.0.0\n"
+            "config_id: mock_smoke_campaign\n"
+            "output_kind: document_ir\n"
+            "supports_pdf_text: true\n"
+            "supports_scanned_pdf: true\n"
+            "supports_tables: true\n"
+            "enabled: true\n"
+            "device: cpu\n"
+            "options:\n"
+            "  benchmark_track: scan_ocr\n"
+            "  prepare_delay_ms: 1\n"
+            "  extract_delay_ms: 1\n"
+            "  mock_family: invoice\n"
+        ),
         encoding="utf-8",
     )
 
