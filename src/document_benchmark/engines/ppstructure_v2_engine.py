@@ -19,7 +19,11 @@ from document_benchmark.core.contracts import (
 from document_benchmark.core.exceptions import EngineUnavailableError
 from document_benchmark.core.statuses import EngineStatus
 from document_benchmark.engines.base import BaseDocumentEngine
-from document_benchmark.engines.runtime import package_version, runtime_identity
+from document_benchmark.engines.runtime import (
+    json_safe,
+    package_version,
+    runtime_identity,
+)
 
 
 def _check_ppstructure_v2_import() -> tuple[bool, str | None, list[str]]:
@@ -154,8 +158,8 @@ class PPStructureV2LegacyEngine(BaseDocumentEngine):
                                 {
                                     "table_index": len(tables),
                                     "page_number": page_index + 1,
-                                    "bbox": region.get("bbox"),
-                                    "raw": result,
+                                    "bbox": json_safe(region.get("bbox")),
+                                    "raw": json_safe(result),
                                 }
                             )
                         elif isinstance(result, list):
