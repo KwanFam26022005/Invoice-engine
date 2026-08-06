@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 import hashlib
+import logging
 import sys
 import uuid
 from pathlib import Path
@@ -13,6 +14,8 @@ from typing import Any
 from document_benchmark.core.contracts import BenchmarkRunSpec, DocumentInput
 from document_benchmark.core.engine_registry import registry
 from document_benchmark.runner.benchmark_controller import BenchmarkController
+
+logger = logging.getLogger(__name__)
 
 
 def compute_sha256(file_path: Path) -> str:
@@ -30,10 +33,16 @@ def inspect_pdf_profile(file_path: Path) -> tuple[int, dict[str, Any]]:
 
         reader = PdfReader(str(file_path))
         text_character_count = 0
-        for page in reader.pages:
+        for page_number, page in enumerate(reader.pages, start=1):
             try:
                 text_character_count += len((page.extract_text() or "").strip())
-            except Exception:
+            except Exception as exc:
+                logger.debug(
+                    "Failed to extract native text from %s page %d: %s",
+                    file_path,
+                    page_number,
+                    exc,
+                )
                 continue
         has_text_layer = text_character_count >= 50
         metadata = {
