@@ -6,4 +6,4 @@ from document_engine.validation.validator import (
     ValidationResult,
 )
 
-__all__ = ["ValidationIssue", "ValidationResult", "BusinessValidator"]
+__all__ = ["BusinessValidator", "ValidationIssue", "ValidationResult"]

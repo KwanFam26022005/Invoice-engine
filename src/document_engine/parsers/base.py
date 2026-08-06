@@ -1,7 +1,7 @@
 """Abstract base class contract for document parsers."""
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 from pydantic import BaseModel, Field
 
 from document_engine.core.models import PDFProfileType
@@ -32,7 +32,6 @@ class DocumentParser(ABC):
     @abstractmethod
     def spec(self) -> ParserSpec:
         """Get parser specification."""
-        pass
 
     @property
     def parser_id(self) -> str:
@@ -41,22 +40,17 @@ class DocumentParser(ABC):
     @abstractmethod
     def healthcheck(self) -> ParserHealth:
         """Check if parser dependencies and environment are ready."""
-        pass
 
     @abstractmethod
     def supports(self, profile: DocumentProfile) -> bool:
         """Check if parser supports the given document profile."""
-        pass
 
     def prepare(self) -> None:
         """Pre-load model weights or initialize context if needed."""
-        pass
 
     @abstractmethod
     def parse(self, document: SourceDocument, profile: DocumentProfile) -> DocumentParseResult:
         """Parse source document into Common Document IR."""
-        pass
 
     def close(self) -> None:
         """Clean up resources."""
-        pass

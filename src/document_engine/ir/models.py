@@ -39,7 +39,7 @@ def generate_run_id(timestamp: Optional[datetime] = None, seed: str = "") -> str
     if timestamp is None:
         timestamp = datetime.now(timezone.utc)
     ts_str = timestamp.strftime("%Y%m%d_%H%M%S")
-    raw_hash = hashlib.sha256(f"{ts_str}_{seed}".encode("utf-8")).hexdigest()[:6]
+    raw_hash = hashlib.sha256(f"{ts_str}_{seed}".encode()).hexdigest()[:6]
     return f"{ts_str}_{raw_hash}"
 
 

@@ -5,7 +5,7 @@ from typing import List, Optional
 from pydantic import BaseModel
 
 from document_engine.classification.classifier import DocumentClassifier
-from document_engine.core.models import ProcessingStatus, ProcessingSummary
+from document_engine.core.models import ProcessingSummary
 from document_engine.extraction.mapper import DocumentMapper
 from document_engine.intake.inspector import PDFInspector
 from document_engine.ir.models import generate_run_id

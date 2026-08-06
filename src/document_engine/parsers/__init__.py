@@ -8,13 +8,13 @@ from document_engine.parsers.pymupdf_native import PyMuPDFNativeParser
 from document_engine.parsers.registry import ParserRegistry, default_registry
 
 __all__ = [
-    "DocumentParser",
-    "ParserSpec",
-    "ParserHealth",
-    "PyMuPDFNativeParser",
     "DoclingNativeParser",
     "DoclingOCRParser",
+    "DocumentParser",
     "PaddleOCRVLParser",
+    "ParserHealth",
     "ParserRegistry",
+    "ParserSpec",
+    "PyMuPDFNativeParser",
     "default_registry",
 ]

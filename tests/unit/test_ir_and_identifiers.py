@@ -13,7 +13,6 @@ from document_engine.ir.models import (
     generate_cell_id,
     generate_document_id,
     generate_page_id,
-    generate_run_id,
     generate_table_id,
 )
 from document_engine.core.models import PDFProfileType

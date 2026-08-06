@@ -4,7 +4,6 @@ from decimal import Decimal
 from document_engine.extraction.normalizer import (
     normalize_container_number,
     normalize_tax_id,
-    normalize_text,
     parse_date,
     parse_decimal,
 )
@@ -23,23 +22,23 @@ def test_normalize_tax_id():
 def test_parse_decimal_vietnamese_formats():
     # 1.234.567
     v1, s1, _ = parse_decimal("1.234.567")
-    assert v1 == Decimal("1234567")
+    assert v1 == Decimal(1234567)
 
     # 1,234,567
     v2, s2, _ = parse_decimal("1,234,567")
-    assert v2 == Decimal("1234567")
+    assert v2 == Decimal(1234567)
 
     # 1 234 567
     v3, s3, _ = parse_decimal("1 234 567")
-    assert v3 == Decimal("1234567")
+    assert v3 == Decimal(1234567)
 
     # 1.234.567 đ
     v4, s4, _ = parse_decimal("1.234.567 đ")
-    assert v4 == Decimal("1234567")
+    assert v4 == Decimal(1234567)
 
     # VND 1,234,567
     v5, s5, _ = parse_decimal("VND 1,234,567")
-    assert v5 == Decimal("1234567")
+    assert v5 == Decimal(1234567)
 
 
 def test_parse_date():

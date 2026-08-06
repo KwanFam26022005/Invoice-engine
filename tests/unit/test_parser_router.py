@@ -3,9 +3,7 @@
 import unicodedata
 from pathlib import Path
 import fitz
-import pytest
 
-from document_engine.core.models import PDFProfileType
 from document_engine.intake.inspector import PDFInspector
 from document_engine.routing.parser_router import ParserRouter
 

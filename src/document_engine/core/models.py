@@ -1,7 +1,7 @@
 """Core status enums and execution models for Document Engine."""
 
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 from pydantic import BaseModel, Field
 
 

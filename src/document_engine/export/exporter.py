@@ -1,9 +1,7 @@
 """Multi-sheet Excel Exporter using openpyxl with formula injection sanitization."""
 
-from datetime import datetime
-from decimal import Decimal
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any
 import openpyxl
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter

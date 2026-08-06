@@ -30,9 +30,7 @@ def normalize_tax_id(raw_tax_id: Optional[str]) -> Tuple[Optional[str], str, Lis
         )
 
     # Standard formats: 10 digits or 10 digits + '-' + 3 digits
-    if re.match(r"^\d{10}$", clean):
-        return clean, "valid", warnings
-    elif re.match(r"^\d{10}\-\d{3}$", clean):
+    if re.match(r"^\d{10}$", clean) or re.match(r"^\d{10}\-\d{3}$", clean):
         return clean, "valid", warnings
     elif re.match(r"^\d{13}$", clean):
         formatted = f"{clean[:10]}-{clean[10:]}"

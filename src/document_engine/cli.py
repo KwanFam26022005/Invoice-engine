@@ -2,7 +2,6 @@
 
 import argparse
 from pathlib import Path
-import sys
 from typing import Optional
 
 from document_engine.export.exporter import ExcelExporter

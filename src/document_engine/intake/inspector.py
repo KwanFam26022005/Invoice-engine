@@ -2,10 +2,10 @@
 
 import hashlib
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import List, Tuple
 import fitz  # PyMuPDF
 
-from document_engine.core.exceptions import IntakeError, InvalidPDFError
+from document_engine.core.exceptions import IntakeError
 from document_engine.core.models import PDFProfileType
 from document_engine.ir.models import (
     DocumentProfile,

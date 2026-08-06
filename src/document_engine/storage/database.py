@@ -2,7 +2,6 @@
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
 import duckdb
 
 from document_engine.schemas.family_schemas import BusinessDocumentEnvelope

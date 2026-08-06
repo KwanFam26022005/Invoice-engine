@@ -6,4 +6,4 @@ from document_engine.review.review_manager import (
     ReviewManager,
 )
 
-__all__ = ["ReviewItem", "CorrectionRecord", "ReviewManager"]
+__all__ = ["CorrectionRecord", "ReviewItem", "ReviewManager"]

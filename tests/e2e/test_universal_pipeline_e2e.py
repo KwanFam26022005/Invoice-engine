@@ -1,10 +1,8 @@
 """End-to-end synthetic integration tests for Universal Document Engine."""
 
-from decimal import Decimal
 from pathlib import Path
 import fitz
 import openpyxl
-import pytest
 
 from document_engine.export.exporter import ExcelExporter
 from document_engine.orchestration.pipeline import DocumentPipeline

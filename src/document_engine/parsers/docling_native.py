@@ -10,17 +10,12 @@ from document_engine.ir.models import (
     DocumentIR,
     DocumentParseResult,
     DocumentProfile,
-    Geometry,
     PageIR,
     ParseWarning,
     ParserProvenance,
     SourceDocument,
-    TableCellIR,
-    TableIR,
     generate_block_id,
-    generate_cell_id,
     generate_page_id,
-    generate_table_id,
 )
 from document_engine.parsers.base import DocumentParser, ParserHealth, ParserSpec
 
