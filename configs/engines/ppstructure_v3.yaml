@@ -15,7 +15,6 @@ device: cpu
 options:
   benchmark_track: scan_ocr
   language: vi
-  inference_engine: paddle
   use_doc_orientation_classify: false
   use_doc_unwarping: false
   use_textline_orientation: false
