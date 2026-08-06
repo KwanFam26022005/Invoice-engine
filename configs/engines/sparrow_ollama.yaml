@@ -1,0 +1,20 @@
+engine_id: sparrow
+engine_version: 1.0.0
+config_id: sparrow_ollama_qwen_vl_7b_q4
+output_kind: schema_json
+supports_pdf_text: true
+supports_scanned_pdf: true
+supports_tables: true
+supports_gpu: true
+supports_multi_page: true
+provides_bounding_boxes: false
+license_name: Apache-2.0
+enabled: false
+device: gpu
+options:
+  pipeline: sparrow-parse
+  backend: ollama
+  model: qwen2-vl:7b
+  quantization: q4
+  schema_validation: true
+  timeout_seconds: 300

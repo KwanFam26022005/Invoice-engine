@@ -1,0 +1,98 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Build
+build/
+dist/
+*.egg-info/
+
+# Environment and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+secrets.json
+auth.json
+
+# IDE and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+logs/
+preparation_logs/*.log
+
+# Runtime benchmark artifacts
+runs/
+outputs/
+artifacts/
+tmp/
+temp/
+.cache/
+model_cache/
+models/
+weights/
+checkpoints/
+
+# Document and dataset binaries
+datasets/archives/
+datasets/staging/
+datasets/raw/
+datasets/reference_merged/
+datasets/benchmark/documents/
+datasets/**/*.pdf
+datasets/**/*.zip
+datasets/**/*.jpg
+datasets/**/*.jpeg
+datasets/**/*.png
+datasets/**/*.tif
+datasets/**/*.tiff
+
+# Generated sensitive outputs
+datasets/**/*ocr*
+datasets/**/*extracted_text*
+datasets/**/*raw_output*
+datasets/**/*canonical_output*
+datasets/**/*reviewed_output*
+datasets/**/*.xlsx
+datasets/**/*.xls
+datasets/**/*.parquet
+
+# Engine/model caches
+.paddleocr/
+.docling/
+.huggingface/
+ollama/
+mlx_models/
+
+# Explicitly allow safe dataset metadata and documentation
+!datasets/README.md
+!datasets/benchmark/manifests/
+!datasets/benchmark/manifests/*.csv
+!datasets/benchmark/manifests/*.jsonl
+!datasets/benchmark/splits/
+!datasets/benchmark/splits/*.txt
+!datasets/preparation_logs/summary.json
+!datasets/preparation_logs/invalid_files.csv

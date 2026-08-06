@@ -1,0 +1,21 @@
+engine_id: ppstructure_v3
+engine_version: 2.7.0
+config_id: ppstructure_vi_table_cpu
+output_kind: document_ir
+supports_pdf_text: true
+supports_scanned_pdf: true
+supports_tables: true
+supports_gpu: false
+supports_multi_page: true
+provides_bounding_boxes: true
+license_name: Apache-2.0
+enabled: true
+device: cpu
+options:
+  language: vi
+  use_doc_preprocessor: true
+  use_general_ocr: true
+  use_table_recognition: true
+  use_formula_recognition: false
+  use_seal_recognition: false
+  timeout_seconds: 240

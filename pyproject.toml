@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "document-engine-benchmark"
+version = "0.1.0"
+description = "Local Document Extraction Engine Benchmark for Vietnamese Logistics Documents"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pydantic>=2.0.0",
+    "duckdb>=0.9.0",
+    "openpyxl>=3.1.0",
+    "psutil>=5.9.0",
+    "pyyaml>=6.0",
+    "pypdf>=3.0.0",
+]
+
+[project.optional-dependencies]
+docling = [
+    "docling>=2.0.0",
+]
+paddle = [
+    "paddlepaddle>=2.5.0",
+    "paddleocr>=2.7.0",
+]
+paddle_vl = [
+    "paddleocr>=2.7.0",
+]
+sparrow = [
+    "ollama>=0.1.0",
+]
+gpu = [
+    "nvidia-ml-py>=12.535.133",
+]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "ruff>=0.1.0",
+    "streamlit>=1.30.0",
+]
+
+[project.scripts]
+document-benchmark = "document_benchmark.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+ignore = ["BLE001", "S110", "PLW1510", "PTH123", "E501", "UP006", "UP035", "UP045", "DTZ005", "DTZ001", "SIM115", "I001", "F841"]

@@ -1,0 +1,18 @@
+engine_id: docling
+engine_version: 2.0.0
+config_id: docling_table_cpu
+output_kind: document_ir
+supports_pdf_text: true
+supports_scanned_pdf: false
+supports_tables: true
+supports_gpu: false
+supports_multi_page: true
+provides_bounding_boxes: true
+license_name: MIT
+enabled: true
+device: cpu
+options:
+  do_ocr: false
+  do_table_structure: true
+  generate_picture_images: false
+  timeout_seconds: 180
