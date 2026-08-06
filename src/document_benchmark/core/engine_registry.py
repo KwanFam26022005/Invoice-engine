@@ -1,4 +1,4 @@
-"""Engine registry for discovering, registering, and instantiating DocumentEngine instances."""
+"""Engine registry for discovering, registering, and instantiating adapters."""
 
 import importlib
 
@@ -12,27 +12,22 @@ from document_benchmark.engines.mock_engine import MockEngine
 
 
 class EngineRegistry:
-    """Central registry for all document extraction engines and engine configurations."""
+    """Central registry for document extraction engines and versioned configs."""
 
     def __init__(self) -> None:
         self._engine_classes: dict[str, type[DocumentEngine]] = {}
         self._configs: dict[str, EngineSpec] = {}
-
-        # Register default built-in engine classes
         self.register_engine_class("mock", MockEngine)
 
     def register_engine_class(self, engine_id: str, cls: type[DocumentEngine]) -> None:
-        """Register an engine class by engine_id."""
         self._engine_classes[engine_id] = cls
 
     def register_config(self, spec: EngineSpec) -> None:
-        """Register an EngineSpec configuration."""
         self._configs[spec.config_id] = spec
 
     def load_config_from_file(self, config_path: str) -> EngineSpec:
-        """Load an EngineSpec from a YAML or JSON file and register it."""
-        with open(config_path, "r", encoding="utf-8") as f:
-            data = yaml.safe_load(f)
+        with open(config_path, "r", encoding="utf-8") as stream:
+            data = yaml.safe_load(stream)
         spec = EngineSpec(**data)
         self.register_config(spec)
         return spec
@@ -42,36 +37,27 @@ class EngineRegistry:
 
     def list_configs(self, enabled_only: bool = False) -> list[EngineSpec]:
         configs = list(self._configs.values())
-        if enabled_only:
-            configs = [c for c in configs if c.enabled]
-        return configs
+        return [config for config in configs if config.enabled] if enabled_only else configs
 
     def create_engine(self, config_id: str) -> DocumentEngine:
-        """Instantiate a DocumentEngine based on config_id."""
         spec = self._configs.get(config_id)
-        if not spec:
+        if spec is None:
             raise EngineUnavailableError(
                 f"Configuration config_id='{config_id}' is not registered.",
                 code="CONFIG_NOT_FOUND",
             )
-
         if spec.engine_id not in self._engine_classes:
-            # Try lazy auto-registration of standard optional engine adapters
             self._try_lazy_register(spec.engine_id)
-
         if spec.engine_id not in self._engine_classes:
             raise EngineUnavailableError(
                 f"Engine '{spec.engine_id}' is not registered.",
                 engine_id=spec.engine_id,
             )
-
-        cls = self._engine_classes[spec.engine_id]
-        return cls(spec)
+        return self._engine_classes[spec.engine_id](spec)
 
     def healthcheck_config(self, config_id: str) -> EngineHealth:
-        """Perform healthcheck on a registered configuration."""
         spec = self._configs.get(config_id)
-        if not spec:
+        if spec is None:
             return EngineHealth(
                 engine_id="unknown",
                 config_id=config_id,
@@ -79,7 +65,6 @@ class EngineRegistry:
                 available=False,
                 error_message=f"Configuration '{config_id}' not found.",
             )
-
         if not spec.enabled:
             return EngineHealth(
                 engine_id=spec.engine_id,
@@ -94,22 +79,25 @@ class EngineRegistry:
             health = engine.healthcheck()
             engine.close()
             return health
-        except Exception as e:
+        except Exception as exc:
             return EngineHealth(
                 engine_id=spec.engine_id,
                 config_id=config_id,
                 status=EngineStatus.UNAVAILABLE,
                 available=False,
-                error_message=str(e),
+                error_message=str(exc),
             )
 
     def _try_lazy_register(self, engine_id: str) -> None:
-        """Attempt to lazily import standard engine modules if available."""
         module_map = {
             "docling": ("document_benchmark.engines.docling_engine", "DoclingEngine"),
             "ppstructure_v3": (
                 "document_benchmark.engines.ppstructure_engine",
-                "PPStructureEngine",
+                "PPStructureV3Engine",
+            ),
+            "ppstructure_v2_legacy": (
+                "document_benchmark.engines.ppstructure_v2_engine",
+                "PPStructureV2LegacyEngine",
             ),
             "paddleocr_vl": (
                 "document_benchmark.engines.paddleocr_vl_engine",
@@ -117,16 +105,15 @@ class EngineRegistry:
             ),
             "sparrow": ("document_benchmark.engines.sparrow_engine", "SparrowEngine"),
         }
+        mapping = module_map.get(engine_id)
+        if mapping is None:
+            return
+        module_path, class_name = mapping
+        try:
+            module = importlib.import_module(module_path)
+            self.register_engine_class(engine_id, getattr(module, class_name))
+        except Exception:
+            return
 
-        if engine_id in module_map:
-            mod_path, class_name = module_map[engine_id]
-            try:
-                mod = importlib.import_module(mod_path)
-                cls = getattr(mod, class_name)
-                self.register_engine_class(engine_id, cls)
-            except Exception:
-                pass
 
-
-# Global singleton instance for convenient usage
 registry = EngineRegistry()
