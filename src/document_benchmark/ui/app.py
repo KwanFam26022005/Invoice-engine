@@ -211,6 +211,13 @@ def main() -> None:
     # TAB 3: Per-Document Comparison
     with tabs[2]:
         st.header("3. Per-Document Extraction & Field Comparison")
+        smoke_camp_dir = Path("runs/smoke/smoke_scan_baseline_001")
+        if smoke_camp_dir.exists():
+            st.info("Found smoke benchmark campaign `runs/smoke/smoke_scan_baseline_001`. You can inspect full single-document comparisons below.")
+            if st.checkbox("Render Campaign Single-Document Comparison UI", value=True):
+                from document_benchmark.ui.comparison_app import run_comparison_app
+                run_comparison_app()
+
         if st.session_state["current_run_summary"]:
             summary = st.session_state["current_run_summary"]
             run_id = summary["run_id"]
@@ -234,7 +241,7 @@ def main() -> None:
                     canonical_results.append(can)
                     validation_issues.extend([i.model_dump() for i in issues])
 
-            st.subheader("Field Disagreement Analysis")
+            st.subheader("Field Disagreement Analysis (Active Run)")
             doc_ids = list({c.document_id for c in canonical_results})
             selected_doc_id = st.selectbox("Select Document", options=doc_ids)
 

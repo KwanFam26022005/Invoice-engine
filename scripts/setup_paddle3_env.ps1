@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")),
+    [string]$ProjectRoot = "",
     [string]$VenvPath = ".venv-paddle3",
     [string]$BasePython = "python",
     [string]$PaddleVersion = "3.2.0",
@@ -9,7 +9,19 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$ProjectRoot = (Resolve-Path $ProjectRoot).Path
+
+if ([string]::IsNullOrWhiteSpace($ProjectRoot)) {
+    $scriptDir = $PSScriptRoot
+    if ([string]::IsNullOrWhiteSpace($scriptDir) -and $MyInvocation.MyCommand.Definition) {
+        $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
+    }
+    if ([string]::IsNullOrWhiteSpace($scriptDir)) {
+        $scriptDir = (Get-Location).Path
+    }
+    $ProjectRoot = (Resolve-Path (Join-Path $scriptDir "..")).Path
+} else {
+    $ProjectRoot = (Resolve-Path $ProjectRoot).Path
+}
 if (-not [System.IO.Path]::IsPathRooted($VenvPath)) {
     $VenvPath = Join-Path $ProjectRoot $VenvPath
 }

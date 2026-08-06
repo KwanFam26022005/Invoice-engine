@@ -51,6 +51,7 @@ runs/
 smoke-runs/
 outputs/
 artifacts/
+analysis_exports/
 tmp/
 temp/
 .cache/
