@@ -19,14 +19,23 @@ dependencies = [
 
 [project.optional-dependencies]
 docling = [
-    "docling>=2.0.0",
+    "docling>=2.0.0,<3.0.0",
+]
+docling_ocr = [
+    "docling>=2.0.0,<3.0.0",
+    "easyocr>=1.7.0,<2.0.0",
 ]
 paddle = [
-    "paddlepaddle>=2.5.0",
-    "paddleocr>=2.7.0",
+    "paddlepaddle>=3.0.0,<4.0.0",
+    "paddleocr>=3.0.0,<4.0.0",
+]
+paddle_legacy = [
+    "paddlepaddle>=2.5.0,<3.0.0",
+    "paddleocr>=2.7.0,<3.0.0",
 ]
 paddle_vl = [
-    "paddleocr>=2.7.0",
+    "paddlepaddle>=3.0.0,<4.0.0",
+    "paddleocr>=3.0.0,<4.0.0",
 ]
 sparrow = [
     "ollama>=0.1.0",
@@ -50,6 +59,9 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+markers = [
+    "optional_engine: requires heavyweight optional engine dependencies and may download models",
+]
 
 [tool.ruff]
 line-length = 100
