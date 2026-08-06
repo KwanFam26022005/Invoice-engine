@@ -2,7 +2,7 @@
 
 import re
 import unicodedata
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 from pydantic import BaseModel, Field
 
 from document_engine.core.models import DocumentFamilyType
@@ -24,13 +24,13 @@ class DocumentClassifier:
             DocumentFamilyType.TAX_WITHHOLDING_CERTIFICATE: {
                 "strong_anchors": [
                     "chúng từ khấu trừ thuế thu nhập cá nhân",
-                    "chúng tử khấu trừ thuế thu nhập cá nhân",
                     "chứng từ khấu trừ thuế thu nhập cá nhân",
+                    "chung tu khau tru thue thu nhap ca nhan",
                     "certificate of personal income tax withholding",
                     "số thuế thu nhập cá nhân đã khấu trừ",
-                    "thuế thu nhập cá nhân đã khấu trừ",
+                    "so thue thu nhap ca nhan da khau tru",
                 ],
-                "weak_anchors": ["khấu trừ thuế", "thu nhập cá nhân", "pit withholding"],
+                "weak_anchors": ["khấu trừ thuế", "khau tru thue", "thu nhập cá nhân", "pit withholding"],
                 "min_score": 2,
             },
             DocumentFamilyType.PORT_SERVICE_INVOICE: {
@@ -38,11 +38,13 @@ class DocumentClassifier:
                     "container",
                     "teu",
                     "nâng hạ",
+                    "nang ha",
                     "lưu bãi",
+                    "luu bai",
                     "gate in",
                     "gate out",
                     "dịch vụ cảng",
-                    "phí xếp dỡ",
+                    "dich vu cang",
                 ],
                 "weak_anchors": ["cont", "bãi", "tàu", "cảng"],
                 "min_score": 2,
@@ -50,10 +52,13 @@ class DocumentClassifier:
             DocumentFamilyType.UTILITY_CONSUMPTION_INVOICE: {
                 "strong_anchors": [
                     "chỉ số cũ",
+                    "chi so cu",
                     "chỉ số mới",
+                    "chi so moi",
                     "sản lượng tiêu thụ",
+                    "san luong tieu thu",
                     "kỳ hóa đơn",
-                    "kỳ thanh toán",
+                    "ky hoa don",
                 ],
                 "weak_anchors": ["kwh", "m3", "tiêu thụ", "điện lực", "cấp nước"],
                 "min_score": 2,
@@ -61,9 +66,10 @@ class DocumentClassifier:
             DocumentFamilyType.SERVICE_VOLUME_INVOICE: {
                 "strong_anchors": [
                     "khối lượng thực hiện",
+                    "khoi luong thuc hien",
                     "số lượt",
+                    "so luot",
                     "bảng tổng hợp dịch vụ",
-                    "khối lượng hoàn thành",
                 ],
                 "weak_anchors": ["sản lượng", "đơn vị tính", "nghiệp vụ"],
                 "min_score": 2,
@@ -71,19 +77,21 @@ class DocumentClassifier:
             DocumentFamilyType.SALES_INVOICE: {
                 "strong_anchors": [
                     "hóa đơn giá trị gia tăng",
+                    "hoa don gia tri gia tang",
                     "hóa đơn bán hàng",
-                    "hóa đơn điện tử",
+                    "hoa don ban hang",
                     "vat invoice",
                     "sales invoice",
                 ],
-                "weak_anchors": ["hóa đơn", "invoice", "mẫu số", "ký hiệu"],
+                "weak_anchors": ["hóa đơn", "hoa don", "invoice", "mẫu số", "ký hiệu"],
                 "min_score": 2,
             },
             DocumentFamilyType.RECEIPT: {
                 "strong_anchors": [
                     "phiếu thu",
+                    "phieu thu",
                     "biên lai",
-                    "biên lai thu tiền",
+                    "bien lai",
                     "payment receipt",
                 ],
                 "weak_anchors": ["receipt", "đã nhận đủ số tiền"],
@@ -92,11 +100,12 @@ class DocumentClassifier:
             DocumentFamilyType.SUPPORTING_STATEMENT: {
                 "strong_anchors": [
                     "bảng kê",
+                    "bang ke",
                     "phụ lục hóa đơn",
-                    "bảng kê chi tiết",
+                    "phu luc hoa don",
                     "supporting statement",
                 ],
-                "weak_anchors": ["phụ lục", "statement", "kèm theo hóa đơn"],
+                "weak_anchors": ["phụ lục", "statement"],
                 "min_score": 2,
             },
         }
@@ -144,13 +153,11 @@ class DocumentClassifier:
                 requires_review=True,
             )
 
-        # Sort by score descending
         scores.sort(key=lambda x: x[1], reverse=True)
         top_family, top_score, top_matched = scores[0]
 
-        # Calculate confidence
         confidence = min(1.0, round(top_score / 6.0, 2))
-        requires_review = confidence < 0.5 or top_family == DocumentFamilyType.UNKNOWN
+        requires_review = confidence < 0.3 or top_family == DocumentFamilyType.UNKNOWN
 
         alt_families = [item[0] for item in scores[1:]]
 
