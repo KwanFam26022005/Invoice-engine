@@ -87,7 +87,6 @@ def test_ppstructure_v3_extraction(tmp_path: Path) -> None:
         options={
             "benchmark_track": "scan_ocr",
             "language": "vi",
-            "inference_engine": "paddle",
             "use_doc_orientation_classify": False,
             "use_doc_unwarping": False,
             "use_textline_orientation": False,
