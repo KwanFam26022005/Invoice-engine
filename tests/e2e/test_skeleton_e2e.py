@@ -110,4 +110,6 @@ def test_incompatible_track_is_skipped_before_worker_start() -> None:
         assert summary["failed_measured_runs"] == 0
         assert summary["results"][0]["status"] == "SKIPPED"
         assert summary["results"][0]["error_type"] == "UnsupportedBenchmarkInput"
-        assert not (tmp_path / "runs" / "run_skip_test" / "raw_outputs").exists()
+        raw_outputs = tmp_path / "runs" / "run_skip_test" / "raw_outputs"
+        assert raw_outputs.exists()
+        assert not any(raw_outputs.rglob("*.json"))
