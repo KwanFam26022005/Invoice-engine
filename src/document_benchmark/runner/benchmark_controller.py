@@ -21,6 +21,7 @@ from document_benchmark.core.contracts import (
 from document_benchmark.core.engine_registry import registry
 from document_benchmark.core.statuses import EngineStatus
 from document_benchmark.runner.environment_probe import probe_environment
+from document_benchmark.runner.input_compatibility import assess_input_compatibility
 from document_benchmark.runner.resource_monitor import ResourceMonitor
 from document_benchmark.runner.timeout_manager import terminate_process_tree
 from document_benchmark.runner.worker_protocol import WorkerRequest, WorkerResponse
@@ -53,6 +54,7 @@ class BenchmarkController:
             "total_documents": len(documents),
             "total_engine_configs": len(spec.engine_config_ids),
             "completed_tasks": 0,
+            "skipped_tasks": 0,
             "results": [],
             "errors": [],
         }
@@ -78,11 +80,50 @@ class BenchmarkController:
                         "config_id": config_id,
                         "status": EngineStatus.UNAVAILABLE.value,
                         "error": health.error_message,
+                        "runtime_metadata": health.runtime_metadata,
                     }
                 )
                 continue
 
             for document in documents:
+                compatibility = assess_input_compatibility(engine_spec, document)
+                if not compatibility.supported:
+                    skipped_result = {
+                        "config_id": config_id,
+                        "document_id": document.document_id,
+                        "run_index": 0,
+                        "is_warmup": False,
+                        "status": EngineStatus.SKIPPED.value,
+                        "success": False,
+                        "error_type": "UnsupportedBenchmarkInput",
+                        "error_message": compatibility.reason,
+                        "input_profile": compatibility.input_profile,
+                        "engine_track": compatibility.engine_track,
+                        "prepare_time_ms": 0.0,
+                        "extract_time_ms": 0.0,
+                        "total_pipeline_ms": 0.0,
+                        "raw_result": None,
+                        "resource_summary": {},
+                        "exit_code": None,
+                    }
+                    status_state["results"].append(skipped_result)
+                    status_state["completed_tasks"] += 1
+                    status_state["skipped_tasks"] += 1
+                    if progress_callback:
+                        progress_callback(
+                            {
+                                "config_id": config_id,
+                                "document_id": document.document_id,
+                                "filename": document.filename,
+                                "run_index": 0,
+                                "is_warmup": False,
+                                "status": EngineStatus.SKIPPED.value,
+                                "message": compatibility.reason,
+                            }
+                        )
+                    self.run_store.save_status(paths, status_state)
+                    continue
+
                 if progress_callback:
                     progress_callback(
                         {
@@ -155,12 +196,20 @@ class BenchmarkController:
                 self.run_store.save_status(paths, status_state)
 
         measured_results = [
-            result for result in status_state["results"] if not result.get("is_warmup", False)
+            result
+            for result in status_state["results"]
+            if not result.get("is_warmup", False)
+            and result.get("status") != EngineStatus.SKIPPED.value
         ]
         successful_results = [result for result in measured_results if result.get("success")]
         failed_results = [result for result in measured_results if not result.get("success")]
 
-        if measured_results and len(successful_results) == len(measured_results) and not status_state["errors"]:
+        if (
+            measured_results
+            and len(successful_results) == len(measured_results)
+            and not status_state["errors"]
+            and status_state["skipped_tasks"] == 0
+        ):
             final_status = "COMPLETED"
         elif successful_results:
             final_status = "COMPLETED_WITH_ERRORS"

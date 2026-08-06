@@ -1,12 +1,15 @@
-"""PP-StructureV3 engine adapter supporting multipage PDF, configurable OCR, and table recognition."""
+"""Local PP-StructureV3 adapter using the PaddleOCR 3.x pipeline API."""
+
+from __future__ import annotations
 
 from datetime import datetime, timezone
 import gc
+import importlib
 import importlib.util
 import logging
 from pathlib import Path
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from document_benchmark.core.contracts import (
     DocumentInput,
@@ -17,48 +20,85 @@ from document_benchmark.core.contracts import (
 from document_benchmark.core.exceptions import EngineUnavailableError
 from document_benchmark.core.statuses import EngineStatus
 from document_benchmark.engines.base import BaseDocumentEngine
+from document_benchmark.engines.runtime import json_safe, package_version, runtime_identity
 
 logger = logging.getLogger(__name__)
 
 
-def _check_ppstructure_import() -> Tuple[bool, Optional[str], List[str]]:
-    """Check if paddleocr and paddlepaddle are available."""
-    missing = []
+def _check_ppstructure_v3_import() -> tuple[bool, str | None, list[str]]:
+    """Check PaddleOCR 3.x dependencies and the PPStructureV3 public symbol."""
+    missing: list[str] = []
     if importlib.util.find_spec("paddle") is None:
-        missing.append("paddlepaddle")
+        missing.append("paddlepaddle>=3.0")
     if importlib.util.find_spec("paddleocr") is None:
-        missing.append("paddleocr")
-
+        missing.append("paddleocr>=3.0")
     if missing:
         return False, f"Missing optional dependencies: {', '.join(missing)}", missing
+
+    try:
+        paddleocr_module = importlib.import_module("paddleocr")
+    except Exception as exc:
+        return False, f"Unable to import paddleocr: {exc}", ["paddleocr>=3.0"]
+    if not hasattr(paddleocr_module, "PPStructureV3"):
+        return (
+            False,
+            "Installed paddleocr does not expose PPStructureV3; install PaddleOCR 3.x",
+            ["paddleocr>=3.0"],
+        )
     return True, None, []
 
 
-class PPStructureEngine(BaseDocumentEngine):
-    """PP-StructureV3 document structure analysis engine adapter."""
+# Compatibility alias retained for callers that imported the original class name.
+def _check_ppstructure_import() -> tuple[bool, str | None, list[str]]:
+    return _check_ppstructure_v3_import()
+
+
+class PPStructureV3Engine(BaseDocumentEngine):
+    """PP-StructureV3 pipeline adapter preserving page JSON and Markdown output."""
 
     def __init__(self, spec: EngineSpec) -> None:
         super().__init__(spec)
-        self.engine_instance = None
-        opts = spec.options or {}
-        self.language: str = str(opts.get("language", "vi"))
-        self.use_general_ocr: bool = bool(opts.get("use_general_ocr", True))
-        self.use_table_recognition: bool = bool(opts.get("use_table_recognition", True))
-        self.use_formula_recognition: bool = bool(opts.get("use_formula_recognition", False))
-        self.use_seal_recognition: bool = bool(opts.get("use_seal_recognition", False))
+        self.pipeline: Any | None = None
+        options = spec.options or {}
+        self.language = str(options.get("language", "vi"))
+        self.use_doc_orientation_classify = bool(
+            options.get("use_doc_orientation_classify", False)
+        )
+        self.use_doc_unwarping = bool(options.get("use_doc_unwarping", False))
+        self.use_textline_orientation = bool(options.get("use_textline_orientation", False))
+        self.use_table_recognition = bool(options.get("use_table_recognition", True))
+        self.use_formula_recognition = bool(options.get("use_formula_recognition", False))
+        self.use_chart_recognition = bool(options.get("use_chart_recognition", False))
+        self.use_seal_recognition = bool(options.get("use_seal_recognition", False))
+        self.inference_engine = options.get("inference_engine")
+        self.benchmark_track = str(options.get("benchmark_track", "scan_ocr"))
+
+    def _runtime_metadata(self) -> dict[str, Any]:
+        metadata: dict[str, Any] = {
+            "adapter_class": type(self).__qualname__,
+            "engine_generation": "PP-StructureV3",
+            "benchmark_track": self.benchmark_track,
+            "package_versions": {
+                "paddleocr": package_version("paddleocr"),
+                "paddlepaddle": package_version("paddlepaddle"),
+            },
+        }
+        if self.pipeline is not None:
+            metadata.update(runtime_identity(self.pipeline))
+        return metadata
 
     def healthcheck(self) -> EngineHealth:
-        available, err_msg, missing = _check_ppstructure_import()
+        available, error_message, missing = _check_ppstructure_v3_import()
         if not available:
             return EngineHealth(
                 engine_id=self.spec.engine_id,
                 config_id=self.spec.config_id,
                 status=EngineStatus.UNAVAILABLE,
                 available=False,
-                error_message=err_msg,
+                error_message=error_message,
                 missing_dependencies=missing,
+                runtime_metadata=self._runtime_metadata(),
             )
-
         if not self.spec.enabled:
             return EngineHealth(
                 engine_id=self.spec.engine_id,
@@ -66,145 +106,115 @@ class PPStructureEngine(BaseDocumentEngine):
                 status=EngineStatus.UNAVAILABLE,
                 available=False,
                 error_message="Config is disabled",
+                runtime_metadata=self._runtime_metadata(),
             )
-
         return EngineHealth(
             engine_id=self.spec.engine_id,
             config_id=self.spec.config_id,
             status=EngineStatus.SUCCESS,
             available=True,
+            runtime_metadata=self._runtime_metadata(),
         )
 
     def prepare(self) -> None:
-        available, err_msg, missing = _check_ppstructure_import()
+        available, error_message, missing = _check_ppstructure_v3_import()
         if not available:
             raise EngineUnavailableError(
-                f"Cannot prepare PPStructureEngine: {err_msg}",
+                f"Cannot prepare PPStructureV3Engine: {error_message}",
                 engine_id=self.spec.engine_id,
                 details={"missing": missing},
             )
 
         try:
-            from paddleocr import PPStructure
+            from paddleocr import PPStructureV3
 
-            self.engine_instance = PPStructure(
-                show_log=False,
-                lang=self.language,
-                ocr=self.use_general_ocr,
-                table=self.use_table_recognition,
-                recovery=True,
-                structure_version="PP-StructureV2",
-            )
+            kwargs: dict[str, Any] = {
+                "lang": self.language,
+                "device": self.spec.device,
+                "use_doc_orientation_classify": self.use_doc_orientation_classify,
+                "use_doc_unwarping": self.use_doc_unwarping,
+                "use_textline_orientation": self.use_textline_orientation,
+                "use_table_recognition": self.use_table_recognition,
+                "use_formula_recognition": self.use_formula_recognition,
+                "use_chart_recognition": self.use_chart_recognition,
+                "use_seal_recognition": self.use_seal_recognition,
+            }
+            if self.inference_engine:
+                kwargs["engine"] = self.inference_engine
+            self.pipeline = PPStructureV3(**kwargs)
             self._is_prepared = True
-        except Exception as e:
+        except Exception as exc:
             raise EngineUnavailableError(
-                f"Failed to initialize PPStructure engine: {e}",
+                f"Failed to initialize PP-StructureV3: {exc}",
                 engine_id=self.spec.engine_id,
-            ) from e
+            ) from exc
 
     def extract(
         self,
         document: DocumentInput,
-        target_schema: Optional[Dict[str, Any]] = None,
+        target_schema: dict[str, Any] | None = None,
     ) -> RawExtractionResult:
-        if not self._is_prepared or self.engine_instance is None:
+        del target_schema
+        if not self._is_prepared or self.pipeline is None:
             self.prepare()
 
         started_at = datetime.now(timezone.utc)
-        start_t = time.perf_counter()
-
+        started = time.perf_counter()
         pdf_path = Path(document.path)
         if not pdf_path.exists():
-            exec_time = (time.perf_counter() - start_t) * 1000.0
-            return RawExtractionResult(
-                run_id="",
-                document_id=document.document_id,
-                engine_id=self.spec.engine_id,
-                config_id=self.spec.config_id,
-                output_kind=self.spec.output_kind,
-                success=False,
-                error_type="FileNotFoundError",
-                error_message=f"PDF document not found: {document.path}",
-                started_at=started_at,
-                completed_at=datetime.now(timezone.utc),
-                execution_time_ms=exec_time,
+            return self._failure_result(
+                document,
+                started_at,
+                started,
+                "FileNotFoundError",
+                f"PDF document not found: {document.path}",
             )
 
         try:
-            # Render PDF pages to numpy images using PyMuPDF (fitz)
-            import fitz
-            import numpy as np
+            page_results: list[dict[str, Any]] = []
+            markdown_payloads: list[dict[str, Any]] = []
+            pages: list[dict[str, Any]] = []
+            tables: list[dict[str, Any]] = []
+            text_parts: list[str] = []
 
-            doc_pdf = fitz.open(str(pdf_path))
-            pages: List[Dict[str, Any]] = []
-            tables: List[Dict[str, Any]] = []
-            text_parts: List[str] = []
+            output = self.pipeline.predict(input=str(pdf_path))
+            for fallback_index, result in enumerate(output):
+                result_json = json_safe(getattr(result, "json", {}))
+                markdown_info = json_safe(getattr(result, "markdown", {}))
+                if not isinstance(result_json, dict):
+                    result_json = {"result": result_json}
+                if not isinstance(markdown_info, dict):
+                    markdown_info = {"markdown_texts": str(markdown_info)}
 
-            table_counter = 0
-            for page_idx, page in enumerate(doc_pdf):
-                page_num = page_idx + 1
-                pix = page.get_pixmap(dpi=150)
-                img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
-                if pix.n == 4:  # RGBA to RGB
-                    import cv2
-
-                    img = cv2.cvtColor(img, cv2.COLOR_RGBA2RGB)
-
-                result = self.engine_instance(img)
-
-                page_text_lines = []
-                for region in result:
-                    r_type = region.get("type", "text")
-                    r_res = region.get("res", [])
-
-                    if r_type == "table":
-                        table_counter += 1
-                        headers, rows = self._parse_pp_table(r_res)
-                        tables.append(
-                            {
-                                "table_index": table_counter - 1,
-                                "page_number": page_num,
-                                "headers": headers,
-                                "rows": rows,
-                                "bbox": region.get("bbox"),
-                            }
-                        )
-                    else:
-                        if isinstance(r_res, list):
-                            for line in r_res:
-                                if isinstance(line, dict) and "text" in line:
-                                    page_text_lines.append(str(line["text"]))
-                                elif isinstance(line, (tuple, list)) and len(line) >= 2:
-                                    txt_tuple = line[1]
-                                    if isinstance(txt_tuple, (tuple, list)):
-                                        page_text_lines.append(str(txt_tuple[0]))
-
-                p_text = "\n".join(page_text_lines)
-                text_parts.append(p_text)
+                page_number = self._page_number(result_json, fallback_index + 1)
+                page_text = self._markdown_text(markdown_info)
+                if page_text:
+                    text_parts.append(page_text)
+                markdown_payloads.append(markdown_info)
+                page_results.append(result_json)
                 pages.append(
                     {
-                        "page_number": page_num,
-                        "text": p_text,
-                        "width": pix.width,
-                        "height": pix.height,
+                        "page_number": page_number,
+                        "text": page_text,
+                        "structured_result": result_json,
                     }
                 )
+                tables.extend(self._collect_tables(result_json, page_number))
 
-            doc_pdf.close()
-
-            full_text = "\n\n--- Page Break ---\n\n".join(text_parts)
-            field_candidates = self._extract_field_candidates(full_text)
+            full_text = self._concatenate_markdown(markdown_payloads, text_parts)
+            warnings: list[str] = []
+            if not page_results:
+                warnings.append("PP-StructureV3 returned no page results")
 
             raw_payload = {
                 "engine": "ppstructure_v3",
                 "config_id": self.spec.config_id,
+                "benchmark_track": self.benchmark_track,
+                "runtime_metadata": self._runtime_metadata(),
                 "pages_processed": len(pages),
                 "table_count": len(tables),
+                "page_results": page_results,
             }
-
-            completed_at = datetime.now(timezone.utc)
-            exec_time = (time.perf_counter() - start_t) * 1000.0
-
             return RawExtractionResult(
                 run_id="",
                 document_id=document.document_id,
@@ -216,57 +226,117 @@ class PPStructureEngine(BaseDocumentEngine):
                 full_text=full_text,
                 pages=pages,
                 tables=tables,
-                field_candidates=field_candidates,
-                warnings=[],
+                field_candidates=self._extract_field_candidates(full_text),
+                warnings=warnings,
                 started_at=started_at,
-                completed_at=completed_at,
-                execution_time_ms=exec_time,
+                completed_at=datetime.now(timezone.utc),
+                execution_time_ms=(time.perf_counter() - started) * 1000.0,
+            )
+        except Exception as exc:
+            return self._failure_result(
+                document,
+                started_at,
+                started,
+                type(exc).__name__,
+                str(exc),
             )
 
-        except Exception as e:
-            completed_at = datetime.now(timezone.utc)
-            exec_time = (time.perf_counter() - start_t) * 1000.0
-            return RawExtractionResult(
-                run_id="",
-                document_id=document.document_id,
-                engine_id=self.spec.engine_id,
-                config_id=self.spec.config_id,
-                output_kind=self.spec.output_kind,
-                success=False,
-                error_type=type(e).__name__,
-                error_message=str(e),
-                started_at=started_at,
-                completed_at=completed_at,
-                execution_time_ms=exec_time,
-            )
-
-    def _parse_pp_table(self, res: Any) -> Tuple[List[str], List[List[str]]]:
-        headers: List[str] = []
-        rows: List[List[str]] = []
-
-        if isinstance(res, dict) and "html" in res:
-            html = res["html"]
+    def _concatenate_markdown(
+        self,
+        markdown_payloads: list[dict[str, Any]],
+        fallback_texts: list[str],
+    ) -> str:
+        if markdown_payloads and hasattr(self.pipeline, "concatenate_markdown_pages"):
             try:
-                from bs4 import BeautifulSoup
-
-                soup = BeautifulSoup(html, "html.parser")
-                tr_tags = soup.find_all("tr")
-                for tr in tr_tags:
-                    cells = [td.get_text(strip=True) for td in tr.find_all(["td", "th"])]
-                    if cells:
-                        if not headers:
-                            headers = cells
-                        else:
-                            rows.append(cells)
+                merged = self.pipeline.concatenate_markdown_pages(markdown_payloads)
+                if isinstance(merged, str):
+                    return merged
             except Exception:
-                pass
+                logger.debug("PP-StructureV3 markdown concatenation failed", exc_info=True)
+        return "\n\n--- Page Break ---\n\n".join(fallback_texts)
 
-        return headers, rows
+    @staticmethod
+    def _markdown_text(markdown_info: dict[str, Any]) -> str:
+        value = markdown_info.get("markdown_texts", "")
+        if isinstance(value, str):
+            return value
+        if isinstance(value, list):
+            return "\n".join(str(item) for item in value)
+        return str(value) if value else ""
 
-    def _extract_field_candidates(self, text: str) -> Dict[str, Any]:
+    @staticmethod
+    def _page_number(result_json: dict[str, Any], fallback: int) -> int:
+        candidates = [result_json, result_json.get("res", {})]
+        for candidate in candidates:
+            if isinstance(candidate, dict):
+                page_index = candidate.get("page_index")
+                if isinstance(page_index, int):
+                    return page_index + 1
+        return fallback
+
+    @classmethod
+    def _collect_tables(cls, value: Any, page_number: int) -> list[dict[str, Any]]:
+        tables: list[dict[str, Any]] = []
+        table_keys = {
+            "table_res_list",
+            "table_results",
+            "table_res",
+            "tables",
+            "table_result",
+        }
+
+        def visit(node: Any, path: str) -> None:
+            if isinstance(node, dict):
+                for key, item in node.items():
+                    child_path = f"{path}.{key}" if path else str(key)
+                    if str(key).casefold() in table_keys:
+                        payloads = item if isinstance(item, list) else [item]
+                        for payload in payloads:
+                            tables.append(
+                                {
+                                    "table_index": len(tables),
+                                    "page_number": page_number,
+                                    "source_path": child_path,
+                                    "raw": json_safe(payload),
+                                }
+                            )
+                    else:
+                        visit(item, child_path)
+            elif isinstance(node, list):
+                for index, item in enumerate(node):
+                    visit(item, f"{path}[{index}]")
+
+        visit(value, "")
+        return tables
+
+    def _failure_result(
+        self,
+        document: DocumentInput,
+        started_at: datetime,
+        started: float,
+        error_type: str,
+        error_message: str,
+    ) -> RawExtractionResult:
+        return RawExtractionResult(
+            run_id="",
+            document_id=document.document_id,
+            engine_id=self.spec.engine_id,
+            config_id=self.spec.config_id,
+            output_kind=self.spec.output_kind,
+            success=False,
+            error_type=error_type,
+            error_message=error_message,
+            raw_payload={"runtime_metadata": self._runtime_metadata()},
+            started_at=started_at,
+            completed_at=datetime.now(timezone.utc),
+            execution_time_ms=(time.perf_counter() - started) * 1000.0,
+        )
+
+    @staticmethod
+    def _extract_field_candidates(text: str) -> dict[str, Any]:
         import re
 
-        candidates: Dict[str, Any] = {}
+        candidates: dict[str, Any] = {}
         patterns = {
             "invoice_number": r"(?:Số|No|Invoice\s*No)[.:\s]*([A-Z0-9\-\/]{4,20})",
             "invoice_series": r"(?:Ký\s*hiệu|Series)[.:\s]*([A-Z0-9]{4,10})",
@@ -274,15 +344,17 @@ class PPStructureEngine(BaseDocumentEngine):
             "seller_tax_id": r"(?:Mã\s*số\s*thuế|MST)[.:\s]*([0-9]{10}(?:-[0-9]{3})?)",
             "total_amount": r"(?:Tổng\s*cộng|Tổng\s*tiền|Total)[.:\s]*([0-9\.,]{4,20})",
         }
-
-        for field, pat in patterns.items():
-            m = re.search(pat, text, re.IGNORECASE)
-            if m:
-                candidates[field] = m.group(1).strip()
-
+        for field, pattern in patterns.items():
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                candidates[field] = match.group(1).strip()
         return candidates
 
     def close(self) -> None:
-        self.engine_instance = None
+        self.pipeline = None
         self._is_prepared = False
         gc.collect()
+
+
+# Backward-compatible import name; it now points to the genuine V3 adapter.
+PPStructureEngine = PPStructureV3Engine

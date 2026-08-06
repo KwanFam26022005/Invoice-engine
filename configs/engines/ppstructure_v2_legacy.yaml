@@ -1,25 +1,21 @@
-engine_id: ppstructure_v3
-engine_version: "3.x"
-config_id: ppstructure_v3_vi_table_cpu
+engine_id: ppstructure_v2_legacy
+engine_version: "2.x"
+config_id: ppstructure_v2_legacy_vi_table_cpu
 output_kind: document_ir
 supports_pdf_text: true
 supports_scanned_pdf: true
 supports_images: true
 supports_tables: true
-supports_gpu: true
+supports_gpu: false
 supports_multi_page: true
 provides_bounding_boxes: true
 license_name: Apache-2.0
-enabled: true
+enabled: false
 device: cpu
 options:
   benchmark_track: scan_ocr
   language: vi
-  use_doc_orientation_classify: false
-  use_doc_unwarping: false
-  use_textline_orientation: false
+  use_general_ocr: true
   use_table_recognition: true
-  use_formula_recognition: false
-  use_chart_recognition: false
-  use_seal_recognition: false
+  render_dpi: 150
   timeout_seconds: 300
