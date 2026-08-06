@@ -1,10 +1,14 @@
-"""Command Line Interface for running Document Engine Benchmarks."""
+"""Command line interface for local document-engine benchmarks."""
+
+from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import hashlib
 import sys
 import uuid
 from pathlib import Path
+from typing import Any
 
 from document_benchmark.core.contracts import BenchmarkRunSpec, DocumentInput
 from document_benchmark.core.engine_registry import registry
@@ -12,40 +16,56 @@ from document_benchmark.runner.benchmark_controller import BenchmarkController
 
 
 def compute_sha256(file_path: Path) -> str:
-    h = hashlib.sha256()
-    with open(file_path, "rb") as f:
-        while chunk := f.read(8192):
-            h.update(chunk)
-    return h.hexdigest()
+    digest = hashlib.sha256()
+    with file_path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(8192), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
-def get_pdf_page_count(file_path: Path) -> int:
+def inspect_pdf_profile(file_path: Path) -> tuple[int, dict[str, Any]]:
+    """Inspect the native PDF text layer without OCR."""
     try:
         from pypdf import PdfReader
 
         reader = PdfReader(str(file_path))
-        return len(reader.pages)
-    except Exception:
-        return 1
+        text_character_count = 0
+        for page in reader.pages:
+            try:
+                text_character_count += len((page.extract_text() or "").strip())
+            except Exception:
+                continue
+        has_text_layer = text_character_count >= 50
+        metadata = {
+            "has_text_layer": has_text_layer,
+            "text_character_count": text_character_count,
+            "is_image_only_pdf": not has_text_layer,
+            "input_profile": "native_pdf" if has_text_layer else "scan_ocr",
+        }
+        return len(reader.pages), metadata
+    except Exception as exc:
+        return 1, {
+            "has_text_layer": None,
+            "text_character_count": None,
+            "is_image_only_pdf": None,
+            "input_profile": None,
+            "inspection_warning": str(exc),
+        }
 
 
 def load_engine_configs(configs_dir: Path) -> None:
     if not configs_dir.exists():
         return
-    for yaml_file in configs_dir.glob("*.yaml"):
+    for yaml_file in sorted(configs_dir.glob("*.yaml")):
         try:
             registry.load_config_from_file(str(yaml_file))
-        except Exception as e:
-            sys.stderr.write(f"Warning: Failed to load config {yaml_file}: {e}\n")
+        except Exception as exc:
+            sys.stderr.write(f"Warning: Failed to load config {yaml_file}: {exc}\n")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Document Engine Benchmark CLI")
-    parser.add_argument(
-        "--pdfs",
-        nargs="+",
-        help="Path to input PDF files",
-    )
+    parser.add_argument("--pdfs", nargs="+", help="Path to input PDF files")
     parser.add_argument(
         "--configs-dir",
         default="configs/engines",
@@ -57,92 +77,75 @@ def main() -> None:
         default=["mock_default"],
         help="Engine config_ids to benchmark",
     )
-    parser.add_argument(
-        "--warmup-runs",
-        type=int,
-        default=1,
-        help="Number of warmup runs",
-    )
-    parser.add_argument(
-        "--measured-runs",
-        type=int,
-        default=2,
-        help="Number of measured runs",
-    )
-    parser.add_argument(
-        "--timeout",
-        type=int,
-        default=60,
-        help="Execution timeout per document in seconds",
-    )
-    parser.add_argument(
-        "--runs-root",
-        default="runs",
-        help="Root directory for saving run artifacts",
-    )
-
+    parser.add_argument("--warmup-runs", type=int, default=1)
+    parser.add_argument("--measured-runs", type=int, default=2)
+    parser.add_argument("--timeout", type=int, default=60)
+    parser.add_argument("--runs-root", default="runs")
     args = parser.parse_args()
 
-    # Load engine configs
-    configs_path = Path(args.configs_dir)
-    load_engine_configs(configs_path)
+    load_engine_configs(Path(args.configs_dir))
 
-    # Process input documents
-    doc_inputs: list[DocumentInput] = []
-    if args.pdfs:
-        for p_str in args.pdfs:
-            p = Path(p_str)
-            if not p.exists():
-                sys.stderr.write(f"PDF file not found: {p}\n")
-                continue
-            doc_id = f"doc_{p.stem}_{hashlib.md5(p_str.encode()).hexdigest()[:6]}"
-            sha = compute_sha256(p)
-            pgs = get_pdf_page_count(p)
-            doc_inputs.append(
-                DocumentInput(
-                    document_id=doc_id,
-                    path=str(p.resolve()),
-                    filename=p.name,
-                    sha256=sha,
-                    page_count=pgs,
-                )
+    documents: list[DocumentInput] = []
+    for path_value in args.pdfs or []:
+        path = Path(path_value)
+        if not path.exists():
+            sys.stderr.write(f"PDF file not found: {path}\n")
+            continue
+        page_count, metadata = inspect_pdf_profile(path)
+        document_id = f"doc_{path.stem}_{hashlib.md5(path_value.encode()).hexdigest()[:6]}"
+        documents.append(
+            DocumentInput(
+                document_id=document_id,
+                path=str(path.resolve()),
+                filename=path.name,
+                sha256=compute_sha256(path),
+                page_count=page_count,
+                metadata=metadata,
             )
+        )
 
-    if not doc_inputs:
+    if not documents:
         sys.stderr.write("No valid PDF inputs provided. Exiting.\n")
-        sys.exit(1)
+        raise SystemExit(1)
 
     run_id = f"run_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
-    spec = BenchmarkRunSpec(
+    run_spec = BenchmarkRunSpec(
         run_id=run_id,
-        document_ids=[d.document_id for d in doc_inputs],
+        document_ids=[document.document_id for document in documents],
         engine_config_ids=args.engines,
         timeout_seconds=args.timeout,
         warmup_runs=args.warmup_runs,
         measured_runs=args.measured_runs,
     )
-
     controller = BenchmarkController(runs_root=args.runs_root)
 
     print(f"=== Starting Benchmark Run: {run_id} ===")
-    print(f"Documents ({len(doc_inputs)}): {[d.filename for d in doc_inputs]}")
+    print(f"Documents ({len(documents)}): {[document.filename for document in documents]}")
+    print(f"Input profiles: {[document.metadata.get('input_profile') for document in documents]}")
     print(f"Engine Configs: {args.engines}")
 
-    def on_progress(p: dict):
+    def on_progress(progress: dict[str, Any]) -> None:
         print(
-            f" Progress: Config={p['config_id']} Doc={p['filename']} Run={p['run_index']} Warmup={p['is_warmup']}"
+            " Progress: "
+            f"Config={progress['config_id']} "
+            f"Doc={progress['filename']} "
+            f"Run={progress['run_index']} "
+            f"Warmup={progress['is_warmup']} "
+            f"Status={progress['status']}"
         )
+        if progress.get("message"):
+            print(f"  Reason: {progress['message']}")
 
     summary = controller.run_benchmark(
-        spec=spec, documents=doc_inputs, progress_callback=on_progress
+        spec=run_spec,
+        documents=documents,
+        progress_callback=on_progress,
     )
-
     print(f"=== Benchmark Completed: {summary['status']} ===")
     print(f"Completed Tasks: {summary['completed_tasks']}")
+    print(f"Skipped Tasks: {summary.get('skipped_tasks', 0)}")
     print(f"Run Artifacts saved to: {Path(args.runs_root) / run_id}")
 
-
-from datetime import datetime, timezone
 
 if __name__ == "__main__":
     main()
