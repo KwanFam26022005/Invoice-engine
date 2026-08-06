@@ -23,6 +23,7 @@ class EngineStatus(str, Enum):
     TIMEOUT = "TIMEOUT"
     OUT_OF_MEMORY = "OUT_OF_MEMORY"
     UNAVAILABLE = "UNAVAILABLE"
+    SKIPPED = "SKIPPED"
     CANCELLED = "CANCELLED"
 
 
