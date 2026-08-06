@@ -28,7 +28,7 @@ docling_ocr = [
 ]
 paddle = [
     "paddlepaddle>=3.0.0,<4.0.0",
-    "paddleocr>=3.0.0,<4.0.0",
+    "paddleocr[doc-parser]>=3.0.0,<4.0.0",
 ]
 paddle_legacy = [
     "paddlepaddle>=2.5.0,<3.0.0",
@@ -53,6 +53,7 @@ dev = [
 
 [project.scripts]
 document-benchmark = "document_benchmark.cli:main"
+document-smoke-benchmark = "document_benchmark.smoke.runner:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
