@@ -11,6 +11,7 @@ htmlcov/
 
 # Virtual environments
 .venv/
+.venv-*/
 venv/
 env/
 ENV/
@@ -46,6 +47,8 @@ preparation_logs/*.log
 
 # Runtime benchmark artifacts
 runs/
+.validation-runs-*/
+smoke-runs/
 outputs/
 artifacts/
 tmp/
