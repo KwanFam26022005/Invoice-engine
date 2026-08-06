@@ -48,6 +48,7 @@ class EngineHealth(BaseModel):
     available: bool
     error_message: str | None = None
     missing_dependencies: list[str] = Field(default_factory=list)
+    runtime_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class DocumentInput(BaseModel):
