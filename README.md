@@ -1,106 +1,142 @@
 # Invoice Engine Benchmark
 
-Hệ thống Local Benchmark đánh giá chất lượng và hiệu năng của các Document Extraction Engine trên các loại hóa đơn và biểu mẫu PDF tại Việt Nam.
+Local-first benchmark for document extraction engines on Vietnamese invoices and internal PDF forms. The project measures extraction quality, latency, CPU/RAM/GPU usage, stability, validation outcomes, and batch-level financial aggregation.
 
----
-
-## 🎯 Mục Tiêu Dự Án
-
-Đánh giá, so sánh và lựa chọn Document Extraction Engine tối ưu (về độ chính xác bóc tách trường thông tin, thời gian xử lý và mức tiêu thụ tài nguyên CPU/RAM/GPU) trên tài liệu PDF hỗn hợp (Hóa đơn GTGT, Hóa đơn Điện & Nước, Hóa đơn bán hàng, Biển lai).
-
----
-
-## 🧩 Engine Candidates
-
-- **Docling** (Text-only CPU & Table recognition profiles)
-- **PP-StructureV3** (PaddleOCR Vietnamese Table & Document IR)
-- **PaddleOCR-VL** (Visual-Language OCR engine)
-- **Sparrow Parse** (Layout & VLM parsing engine)
-
----
-
-## 🏗 Kiến Trúc Hệ Thống
+## Architecture
 
 ```text
-PDF Input
-  │
-  ▼
-DocumentEngine (Isolated Subprocess Runner)
-  │
-  ▼
-Raw Extraction Result (Document IR / Bounding Boxes / Tables)
-  │
-  ▼
-Canonical Normalization (High-Precision Decimal, Standard Dates, Tax IDs)
-  │
-  ▼
-Business Validation Rules (subtotal - discount + VAT ≈ total_amount)
-  │
-  ▼
-Evaluation (Cross-Engine Disagreement & Ground-Truth Matching)
-  │
-  ▼
-DuckDB Aggregation (In-Memory SQL Financial Aggregates)
-  │
-  ▼
-Excel / CSV Benchmark Reports & Business Output Workbooks
+PDF input
+  → input-profile inspection (native text or image-only scan)
+  → DocumentEngine registry
+  → isolated warm/cold worker
+  → raw engine output and runtime identity
+  → canonical normalization
+  → business validation
+  → evaluation and cross-engine comparison
+  → DuckDB aggregation
+  → Excel/CSV report
 ```
 
----
+## Benchmark tracks
 
-## ⚙️ Cài Đặt Môi Trường Base
+Engines are compared only within compatible input tracks:
 
-```bash
-# Clone repository
+| Track | Input | Baseline profiles |
+|---|---|---|
+| `native_pdf` | PDF with a usable embedded text layer | `docling_text_only_cpu`, `docling_table_cpu` |
+| `scan_ocr` | Image-only/scanned PDF | `docling_ocr_easyocr_vi_cpu`, `ppstructure_v3_vi_table_cpu` |
+
+An incompatible engine/document pairing is recorded as `SKIPPED` before model loading. This prevents an OCR-disabled parser from being ranked against OCR-enabled pipelines on scanned PDFs.
+
+## Engine status
+
+- **Docling native profiles:** implemented.
+- **Docling EasyOCR Vietnamese profile:** implemented for scanned PDFs.
+- **PP-StructureV3:** implemented with the PaddleOCR 3.x `PPStructureV3` pipeline API.
+- **PP-StructureV2 legacy:** retained under an explicit, disabled legacy profile; it is never labelled as V3.
+- **PaddleOCR-VL and Sparrow:** planned optional adapters, not production-ready in the current repository.
+
+Every real-engine result records the concrete runtime class and installed package versions in `raw_payload.runtime_metadata`.
+
+## Base installation
+
+```powershell
 git clone https://github.com/KwanFam26022005/Invoice-engine.git
 cd Invoice-engine
-
-# Cài đặt package ở chế độ editable
-python -m pip install -e .
-
-# Cài đặt các thư viện bổ trợ cho testing và UI
-python -m pip install pytest ruff streamlit duckdb openpyxl pypdf PyMuPDF
+python -m pip install -e ".[dev]"
 ```
 
----
+## Optional engine environments
 
-## 🧪 Chạy Test Suite
+Keep heavyweight engines in separate virtual environments when dependencies conflict.
 
-```bash
-# Chạy 32 unit & contract tests
-python -m pytest -v
+### Docling native parsing
 
-# Kiểm tra Linter & Style Rules
+```powershell
+python -m pip install -e ".[docling,dev]"
+```
+
+### Docling OCR
+
+```powershell
+python -m pip install -e ".[docling_ocr,dev]"
+```
+
+### PP-StructureV3
+
+PaddleOCR 3.x requires PaddlePaddle 3.x. Install the appropriate CPU or GPU PaddlePaddle wheel for the target machine first, then:
+
+```powershell
+python -m pip install -e ".[paddle,dev]"
+```
+
+### PP-StructureV2 legacy
+
+The legacy dependency group is intentionally separate and the profile is disabled by default:
+
+```powershell
+python -m pip install -e ".[paddle_legacy,dev]"
+```
+
+Do not install the V2 and V3 Paddle stacks into the same benchmark environment.
+
+## Dataset preparation
+
+```powershell
+python scripts\prepare_benchmark_dataset.py `
+  --dataset-root "D:\Documents-engine\datasets"
+```
+
+Read-only integrity verification:
+
+```powershell
+python scripts\prepare_benchmark_dataset.py `
+  --dataset-root "D:\Documents-engine\datasets" `
+  --verify-only
+```
+
+The current local corpus contains 51 valid image-only PDFs. Raw PDFs, images, ZIP archives, OCR output, and generated benchmark runs are excluded from Git.
+
+## Tests
+
+Base suite:
+
+```powershell
 python -m ruff check src tests scripts
+python -m compileall -q src tests scripts
+python -m pytest -v
 ```
 
----
+Heavy model extraction tests are explicit opt-in tests:
 
-## 📦 Chuẩn Bị và Kiểm Tra Dataset
-
-### 1. Chạy Dataset Preparation Pipeline
-
-```bash
-python scripts/prepare_benchmark_dataset.py --dataset-root "D:\Documents-engine\datasets"
+```powershell
+$env:RUN_OPTIONAL_ENGINE_TESTS = "1"
+python -m pytest -m optional_engine -v
 ```
 
-### 2. Kiểm Tra Integrity (Verify-Only Mode)
+Without that environment variable, optional model tests report `SKIPPED`; health checks and adapter contract tests still run without downloading model weights.
 
-```bash
-python scripts/prepare_benchmark_dataset.py --dataset-root "D:\Documents-engine\datasets" --verify-only
+## Example benchmark commands
+
+Scanned PDF track:
+
+```powershell
+python -m document_benchmark.cli `
+  --pdfs "D:\Documents-engine\datasets\benchmark\documents\utilities\sample.pdf" `
+  --engines docling_ocr_easyocr_vi_cpu ppstructure_v3_vi_table_cpu `
+  --warmup-runs 1 `
+  --measured-runs 3 `
+  --timeout 300
 ```
 
----
+Native-text track:
 
-## 🔒 Chính Sách Không Commit Raw Documents
+```powershell
+python -m document_benchmark.cli `
+  --pdfs "D:\path\to\native_text_invoice.pdf" `
+  --engines docling_text_only_cpu docling_table_cpu
+```
 
-Toàn bộ file PDF hóa đơn gốc, file ảnh (JPG/PNG) và file nén ZIP **không được version-control trên Git** để tuân thủ quy định bảo mật thông tin.
-Git chỉ lưu vết mã nguồn Python, cấu hình YAML, file manifests đã sanitize và phân chia benchmark splits (`smoke_test.txt`, `benchmark_full.txt`, `hard_cases.txt`).
+## Security policy
 
----
-
-## 📌 Trạng Thái Hiện Tại của Dự Án
-
-- ✅ **Dataset Preparation**: Hoàn thành chuẩn bị corpus 51 image-only PDFs hợp lệ.
-- ✅ **Test Coverage**: Passed 32/32 unit, contract, và integration tests.
-- 🚀 **Bước tiếp theo**: Đánh giá benchmark quy mô lớn trên toàn bộ candidate engines.
+The application is local-only for this scope. It does not send documents to cloud APIs. Never commit invoice PDFs, document images, ZIP archives, model caches, extracted full text, or generated run artifacts.
