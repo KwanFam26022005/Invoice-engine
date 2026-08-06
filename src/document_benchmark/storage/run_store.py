@@ -29,16 +29,19 @@ class RunStore:
         return paths
 
     def save_run_spec(self, paths: RunArtifactPaths, spec: BenchmarkRunSpec) -> None:
-        with open(paths.run_config_file, "w", encoding="utf-8") as f:
-            yaml.safe_dump(spec.model_dump(mode="json"), f, default_flow_style=False)
+        with paths.run_config_file.open("w", encoding="utf-8") as file:
+            yaml.safe_dump(spec.model_dump(mode="json"), file, default_flow_style=False)
 
     def save_environment(self, paths: RunArtifactPaths, env_data: dict[str, Any]) -> None:
-        with open(paths.environment_file, "w", encoding="utf-8") as f:
-            json.dump(env_data, f, indent=2, ensure_ascii=False)
+        paths.environment_file.write_text(
+            json.dumps(env_data, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
 
     def save_status(self, paths: RunArtifactPaths, status_data: dict[str, Any]) -> None:
-        with open(paths.status_file, "w", encoding="utf-8") as f:
-            json.dump(status_data, f, indent=2, ensure_ascii=False, default=str)
+        paths.status_file.write_text(
+            json.dumps(status_data, indent=2, ensure_ascii=False, default=str),
+            encoding="utf-8",
+        )
 
     def save_manifest(self, paths: RunArtifactPaths, documents: list[DocumentInput]) -> None:
         fieldnames = [
@@ -49,28 +52,34 @@ class RunStore:
             "mime_type",
             "path",
         ]
-        with open(paths.manifest_file, "w", encoding="utf-8", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
+        with paths.manifest_file.open("w", encoding="utf-8", newline="") as file:
+            writer = csv.DictWriter(file, fieldnames=fieldnames)
             writer.writeheader()
-            for doc in documents:
+            for document in documents:
                 writer.writerow(
                     {
-                        "document_id": doc.document_id,
-                        "filename": doc.filename,
-                        "sha256": doc.sha256,
-                        "page_count": doc.page_count,
-                        "mime_type": doc.mime_type,
-                        "path": doc.path,
+                        "document_id": document.document_id,
+                        "filename": document.filename,
+                        "sha256": document.sha256,
+                        "page_count": document.page_count,
+                        "mime_type": document.mime_type,
+                        "path": document.path,
                     }
                 )
 
     def save_raw_result(
-        self, paths: RunArtifactPaths, config_id: str, result: RawExtractionResult
+        self,
+        paths: RunArtifactPaths,
+        config_id: str,
+        result: RawExtractionResult,
+        run_index: int | None = None,
     ) -> Path:
-        out_dir = paths.engine_raw_output_dir(config_id)
-        file_path = out_dir / f"{result.document_id}.json"
-        with open(file_path, "w", encoding="utf-8") as f:
-            f.write(result.model_dump_json(indent=2))
+        """Persist one extraction result without overwriting repeat outputs."""
+        document_dir = paths.engine_raw_output_dir(config_id) / result.document_id
+        document_dir.mkdir(parents=True, exist_ok=True)
+        filename = "result.json" if run_index is None else f"run_{run_index:03d}.json"
+        file_path = document_dir / filename
+        file_path.write_text(result.model_dump_json(indent=2), encoding="utf-8")
         return file_path
 
     def save_resource_samples(
@@ -82,25 +91,29 @@ class RunStore:
         samples: list[ResourceSample],
         summary: ResourceSummary,
     ) -> None:
-        out_file = (
-            paths.resource_samples_dir / f"{config_id}_{document_id}_run{run_index}.json"
-        )
+        out_file = paths.resource_samples_dir / f"{config_id}_{document_id}_run{run_index}.json"
         data = {
             "config_id": config_id,
             "document_id": document_id,
             "run_index": run_index,
             "summary": summary.model_dump(),
-            "samples": [s.model_dump() for s in samples],
+            "samples": [sample.model_dump() for sample in samples],
         }
-        with open(out_file, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
+        out_file.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
     def load_raw_result(
-        self, paths: RunArtifactPaths, config_id: str, document_id: str
+        self,
+        paths: RunArtifactPaths,
+        config_id: str,
+        document_id: str,
+        run_index: int | None = None,
     ) -> RawExtractionResult | None:
-        file_path = paths.engine_raw_output_dir(config_id) / f"{document_id}.json"
+        document_dir = paths.engine_raw_output_dir(config_id) / document_id
+        filename = "result.json" if run_index is None else f"run_{run_index:03d}.json"
+        file_path = document_dir / filename
+        if not file_path.exists() and run_index is None:
+            candidates = sorted(document_dir.glob("run_*.json")) if document_dir.exists() else []
+            file_path = candidates[-1] if candidates else file_path
         if not file_path.exists():
             return None
-        with open(file_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return RawExtractionResult(**data)
+        return RawExtractionResult(**json.loads(file_path.read_text(encoding="utf-8")))

@@ -42,11 +42,8 @@ class BenchmarkController:
         progress_callback: Callable[[dict[str, Any]], None] | None = None,
     ) -> dict[str, Any]:
         paths = self.run_store.get_paths(spec.run_id)
-
-        # 1. Save spec & environment probe
         self.run_store.save_run_spec(paths, spec)
-        env_data = probe_environment()
-        self.run_store.save_environment(paths, env_data)
+        self.run_store.save_environment(paths, probe_environment())
         self.run_store.save_manifest(paths, documents)
 
         status_state: dict[str, Any] = {
@@ -61,22 +58,21 @@ class BenchmarkController:
         }
         self.run_store.save_status(paths, status_state)
 
-        # 2. Iterate through configs and documents
-        total_runs_per_doc = spec.warmup_runs + spec.measured_runs
-
         for config_id in spec.engine_config_ids:
             engine_spec = registry.get_config(config_id)
-            if not engine_spec:
-                err_msg = f"Engine configuration '{config_id}' not found."
-                logger.error(err_msg)
-                status_state["errors"].append({"config_id": config_id, "error": err_msg})
+            if engine_spec is None:
+                message = f"Engine configuration '{config_id}' not found."
+                status_state["errors"].append(
+                    {
+                        "config_id": config_id,
+                        "status": EngineStatus.UNAVAILABLE.value,
+                        "error": message,
+                    }
+                )
                 continue
 
             health = registry.healthcheck_config(config_id)
             if not health.available:
-                logger.warning(
-                    f"Config '{config_id}' is UNAVAILABLE ({health.error_message}). Skipping."
-                )
                 status_state["errors"].append(
                     {
                         "config_id": config_id,
@@ -86,188 +82,248 @@ class BenchmarkController:
                 )
                 continue
 
-            for doc in documents:
-                for run_idx in range(1, total_runs_per_doc + 1):
-                    is_warmup = run_idx <= spec.warmup_runs
-
-                    if progress_callback:
-                        progress_callback(
-                            {
-                                "config_id": config_id,
-                                "document_id": doc.document_id,
-                                "filename": doc.filename,
-                                "run_index": run_idx,
-                                "is_warmup": is_warmup,
-                                "status": "RUNNING",
-                            }
-                        )
-
-                    res_dict = self._execute_isolated_run(
-                        spec=spec,
-                        engine_spec=engine_spec,
-                        doc=doc,
-                        run_index=run_idx,
-                        is_warmup=is_warmup,
-                        paths=paths,
+            for document in documents:
+                if progress_callback:
+                    progress_callback(
+                        {
+                            "config_id": config_id,
+                            "document_id": document.document_id,
+                            "filename": document.filename,
+                            "run_index": 0,
+                            "is_warmup": False,
+                            "status": EngineStatus.PREPARING.value,
+                        }
                     )
 
-                    if not is_warmup and res_dict.get("raw_result"):
-                        raw_res = RawExtractionResult(**res_dict["raw_result"])
-                        self.run_store.save_raw_result(paths, config_id, raw_res)
+                batch_result = self._execute_isolated_batch(
+                    spec=spec,
+                    engine_spec=engine_spec,
+                    document=document,
+                    paths=paths,
+                )
 
-                    status_state["results"].append(res_dict)
+                run_results = batch_result.pop("run_results", [])
+                if not run_results:
+                    status_state["results"].append(batch_result)
                     status_state["completed_tasks"] += 1
-                    self.run_store.save_status(paths, status_state)
+                else:
+                    for run_result in run_results:
+                        combined = {
+                            "config_id": config_id,
+                            "document_id": document.document_id,
+                            "run_index": run_result["run_index"],
+                            "is_warmup": run_result["is_warmup"],
+                            "status": run_result["status"],
+                            "success": run_result["success"],
+                            "error_type": run_result.get("error_type"),
+                            "error_message": run_result.get("error_message"),
+                            "prepare_time_ms": (
+                                batch_result["prepare_time_ms"]
+                                if run_result["run_index"] == 1
+                                else 0.0
+                            ),
+                            "extract_time_ms": run_result.get("extract_time_ms", 0.0),
+                            "total_pipeline_ms": batch_result["total_pipeline_ms"],
+                            "raw_result": run_result.get("raw_result"),
+                            "resource_summary": batch_result["resource_summary"],
+                            "exit_code": batch_result.get("exit_code"),
+                        }
+                        status_state["results"].append(combined)
+                        status_state["completed_tasks"] += 1
 
-        status_state["status"] = "COMPLETED"
+                        if not run_result["is_warmup"] and run_result.get("raw_result"):
+                            raw_result = RawExtractionResult(**run_result["raw_result"])
+                            self.run_store.save_raw_result(
+                                paths,
+                                config_id,
+                                raw_result,
+                                run_index=run_result["run_index"],
+                            )
+
+                        if progress_callback:
+                            progress_callback(
+                                {
+                                    "config_id": config_id,
+                                    "document_id": document.document_id,
+                                    "filename": document.filename,
+                                    "run_index": run_result["run_index"],
+                                    "is_warmup": run_result["is_warmup"],
+                                    "status": run_result["status"],
+                                }
+                            )
+
+                self.run_store.save_status(paths, status_state)
+
+        measured_results = [
+            result for result in status_state["results"] if not result.get("is_warmup", False)
+        ]
+        successful_results = [result for result in measured_results if result.get("success")]
+        failed_results = [result for result in measured_results if not result.get("success")]
+
+        if measured_results and len(successful_results) == len(measured_results) and not status_state["errors"]:
+            final_status = "COMPLETED"
+        elif successful_results:
+            final_status = "COMPLETED_WITH_ERRORS"
+        else:
+            final_status = "FAILED"
+
+        status_state["status"] = final_status
+        status_state["successful_measured_runs"] = len(successful_results)
+        status_state["failed_measured_runs"] = len(failed_results)
         status_state["completed_at"] = datetime.now(timezone.utc).isoformat()
         self.run_store.save_status(paths, status_state)
-
         return status_state
 
-    def _execute_isolated_run(
+    def _execute_isolated_batch(
         self,
         spec: BenchmarkRunSpec,
         engine_spec: EngineSpec,
-        doc: DocumentInput,
-        run_index: int,
-        is_warmup: bool,
+        document: DocumentInput,
         paths: Any,
     ) -> dict[str, Any]:
         with tempfile.TemporaryDirectory(prefix="bm_worker_") as temp_dir:
             temp_path = Path(temp_dir)
-            req_file = temp_path / "request.json"
-            resp_file = temp_path / "response.json"
-            worker_log_file = paths.engine_log_dir(engine_spec.config_id) / f"{doc.document_id}_run{run_index}.log"
-
-            worker_req = WorkerRequest(
-                run_id=spec.run_id,
-                engine_spec=engine_spec,
-                document=doc,
-                action="extract",
-                output_file=str(resp_file),
+            request_file = temp_path / "request.json"
+            response_file = temp_path / "response.json"
+            worker_log_file = (
+                paths.engine_log_dir(engine_spec.config_id) / f"{document.document_id}_batch.log"
             )
 
-            with open(req_file, "w", encoding="utf-8") as f:
-                f.write(worker_req.model_dump_json(indent=2))
+            worker_request = WorkerRequest(
+                run_id=spec.run_id,
+                engine_spec=engine_spec,
+                document=document,
+                action="benchmark",
+                output_file=str(response_file),
+                warmup_runs=spec.warmup_runs,
+                measured_runs=spec.measured_runs,
+                reuse_prepared_engine=True,
+            )
+            request_file.write_text(worker_request.model_dump_json(indent=2), encoding="utf-8")
 
-            cmd = [
+            command = [
                 sys.executable,
                 "-m",
                 "document_benchmark.runner.isolated_worker",
                 "--request-file",
-                str(req_file),
+                str(request_file),
             ]
 
-            log_f = open(worker_log_file, "w", encoding="utf-8")
+            started = time.perf_counter()
+            with worker_log_file.open("w", encoding="utf-8") as log_file:
+                try:
+                    process = subprocess.Popen(
+                        command,
+                        stdout=log_file,
+                        stderr=subprocess.STDOUT,
+                        cwd=os.getcwd(),
+                    )
+                except Exception as exc:
+                    return self._failed_batch(
+                        engine_spec,
+                        document,
+                        "SubprocessLaunchError",
+                        str(exc),
+                    )
 
-            start_t = time.perf_counter()
-
-            try:
-                proc = subprocess.Popen(
-                    cmd,
-                    stdout=log_f,
-                    stderr=subprocess.STDOUT,
-                    cwd=os.getcwd(),
+                monitor = ResourceMonitor(
+                    target_pid=process.pid,
+                    sample_interval_ms=spec.resource_sample_interval_ms,
                 )
-            except Exception as e:
-                log_f.close()
-                return {
-                    "config_id": engine_spec.config_id,
-                    "document_id": doc.document_id,
-                    "run_index": run_index,
-                    "is_warmup": is_warmup,
-                    "status": EngineStatus.FAILED.value,
-                    "error_type": "SubprocessLaunchError",
-                    "error_message": str(e),
-                    "execution_time_ms": 0.0,
-                }
+                monitor.start()
+                timed_out = False
+                try:
+                    process.wait(timeout=float(spec.timeout_seconds))
+                except subprocess.TimeoutExpired:
+                    timed_out = True
+                    terminate_process_tree(process.pid)
+                finally:
+                    samples, resource_summary = monitor.stop()
 
-            # Start resource monitor
-            monitor = ResourceMonitor(
-                target_pid=proc.pid,
-                sample_interval_ms=spec.resource_sample_interval_ms,
+            total_ms = round((time.perf_counter() - started) * 1000.0, 2)
+            self.run_store.save_resource_samples(
+                paths=paths,
+                config_id=engine_spec.config_id,
+                document_id=document.document_id,
+                run_index=0,
+                samples=samples,
+                summary=resource_summary,
             )
-            monitor.start()
-
-            timed_out = False
-            try:
-                proc.wait(timeout=float(spec.timeout_seconds))
-            except subprocess.TimeoutExpired:
-                timed_out = True
-                terminate_process_tree(proc.pid)
-            finally:
-                samples, resource_summary = monitor.stop()
-                log_f.close()
-
-            total_ms = (time.perf_counter() - start_t) * 1000.0
-
-            # Save resource samples if measured run
-            if not is_warmup:
-                self.run_store.save_resource_samples(
-                    paths=paths,
-                    config_id=engine_spec.config_id,
-                    document_id=doc.document_id,
-                    run_index=run_index,
-                    samples=samples,
-                    summary=resource_summary,
-                )
 
             if timed_out:
                 return {
-                    "config_id": engine_spec.config_id,
-                    "document_id": doc.document_id,
-                    "run_index": run_index,
-                    "is_warmup": is_warmup,
+                    **self._failed_batch(
+                        engine_spec,
+                        document,
+                        "EngineTimeoutError",
+                        f"Worker process exceeded timeout of {spec.timeout_seconds}s",
+                    ),
                     "status": EngineStatus.TIMEOUT.value,
-                    "error_type": "EngineTimeoutError",
-                    "error_message": f"Worker process exceeded timeout of {spec.timeout_seconds}s",
-                    "execution_time_ms": total_ms,
+                    "total_pipeline_ms": total_ms,
                     "resource_summary": resource_summary.model_dump(),
+                    "exit_code": process.returncode,
                 }
 
-            if not resp_file.exists():
+            if not response_file.exists():
                 return {
-                    "config_id": engine_spec.config_id,
-                    "document_id": doc.document_id,
-                    "run_index": run_index,
-                    "is_warmup": is_warmup,
-                    "status": EngineStatus.FAILED.value,
-                    "error_type": "WorkerProtocolError",
-                    "error_message": f"Worker process exited with code {proc.returncode} without output response.",
-                    "execution_time_ms": total_ms,
+                    **self._failed_batch(
+                        engine_spec,
+                        document,
+                        "WorkerProtocolError",
+                        f"Worker exited with code {process.returncode} without a response file",
+                    ),
+                    "total_pipeline_ms": total_ms,
                     "resource_summary": resource_summary.model_dump(),
+                    "exit_code": process.returncode,
                 }
 
             try:
-                with open(resp_file, "r", encoding="utf-8") as f:
-                    worker_resp_data = json.load(f)
-                worker_resp = WorkerResponse(**worker_resp_data)
-            except Exception as e:
+                response = WorkerResponse(
+                    **json.loads(response_file.read_text(encoding="utf-8"))
+                )
+            except Exception as exc:
                 return {
-                    "config_id": engine_spec.config_id,
-                    "document_id": doc.document_id,
-                    "run_index": run_index,
-                    "is_warmup": is_warmup,
-                    "status": EngineStatus.FAILED.value,
-                    "error_type": "WorkerResponseParseError",
-                    "error_message": f"Failed to parse worker response JSON: {e}",
-                    "execution_time_ms": total_ms,
+                    **self._failed_batch(
+                        engine_spec,
+                        document,
+                        "WorkerResponseParseError",
+                        str(exc),
+                    ),
+                    "total_pipeline_ms": total_ms,
                     "resource_summary": resource_summary.model_dump(),
+                    "exit_code": process.returncode,
                 }
 
             return {
                 "config_id": engine_spec.config_id,
-                "document_id": doc.document_id,
-                "run_index": run_index,
-                "is_warmup": is_warmup,
-                "status": worker_resp.status.value,
-                "success": worker_resp.success,
-                "error_type": worker_resp.error_type,
-                "error_message": worker_resp.error_message,
-                "prepare_time_ms": worker_resp.prepare_time_ms,
-                "extract_time_ms": worker_resp.extract_time_ms,
-                "total_pipeline_ms": round(total_ms, 2),
-                "raw_result": worker_resp.raw_result.model_dump(mode="json") if worker_resp.raw_result else None,
+                "document_id": document.document_id,
+                "status": response.status.value,
+                "success": response.success,
+                "error_type": response.error_type,
+                "error_message": response.error_message,
+                "prepare_time_ms": response.prepare_time_ms,
+                "total_pipeline_ms": total_ms,
                 "resource_summary": resource_summary.model_dump(),
+                "exit_code": process.returncode,
+                "run_results": [result.model_dump(mode="json") for result in response.run_results],
             }
+
+    @staticmethod
+    def _failed_batch(
+        engine_spec: EngineSpec,
+        document: DocumentInput,
+        error_type: str,
+        error_message: str,
+    ) -> dict[str, Any]:
+        return {
+            "config_id": engine_spec.config_id,
+            "document_id": document.document_id,
+            "status": EngineStatus.FAILED.value,
+            "success": False,
+            "error_type": error_type,
+            "error_message": error_message,
+            "prepare_time_ms": 0.0,
+            "total_pipeline_ms": 0.0,
+            "resource_summary": {},
+            "run_results": [],
+        }
