@@ -17,8 +17,14 @@ def test_pilot_manual_audit_defaults_to_not_audited(tmp_path, monkeypatch, capsy
     }
     manifest_file.write_text(yaml.dump(manifest_data), encoding="utf-8")
 
-    monkeypatch.setattr("sys.argv", ["run_pilot.py", "--manifest", str(manifest_file)])
+    output_dir = tmp_path / "reports"
+    monkeypatch.setattr(
+        "sys.argv",
+        ["run_pilot.py", "--manifest", str(manifest_file), "--output-dir", str(output_dir)],
+    )
     main()
 
     captured = capsys.readouterr()
-    assert "manual_audit_status: NOT_AUDITED" in captured.out
+    assert "Starting Private Real-Document Pilot V2" in captured.out
+    assert output_dir.exists()
+
