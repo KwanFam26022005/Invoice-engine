@@ -1,0 +1,13 @@
+parser_id: pymupdf_native
+name: PyMuPDF Native Parser
+version: 1.0.0
+description: High-performance native PDF text, block, word, and vector layout extractor.
+supported_profiles:
+  - native_pdf
+  - mixed_pdf
+requires_gpu: false
+is_fallback: false
+config:
+  extract_words: true
+  extract_blocks: true
+  extract_drawings: false
