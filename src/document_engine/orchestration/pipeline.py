@@ -1,4 +1,4 @@
-"""End-to-end document processing pipeline and batch processor."""
+"""End-to-end document processing pipeline with two-level execution and semantic fallback."""
 
 from pathlib import Path
 from typing import List, Optional
@@ -6,10 +6,11 @@ from pydantic import BaseModel
 
 from document_engine.classification.classifier import DocumentClassifier
 from document_engine.core.models import ProcessingSummary
+from document_engine.extraction.candidate import FamilyCompletenessReport
 from document_engine.extraction.mapper import DocumentMapper
 from document_engine.intake.inspector import PDFInspector
 from document_engine.ir.models import generate_run_id
-from document_engine.routing.parser_router import ParserRouter
+from document_engine.routing.parser_router import ParserRouter, RoutingDecision
 from document_engine.schemas.family_schemas import BusinessDocumentEnvelope
 from document_engine.settings import AppConfig, get_workspace_paths
 from document_engine.storage.database import DuckDBStorage
@@ -26,6 +27,8 @@ class PipelineResult(BaseModel):
     database_path: str
     envelope: Optional[BusinessDocumentEnvelope] = None
     validation: Optional[ValidationResult] = None
+    completeness: Optional[FamilyCompletenessReport] = None
+    routing_decision: Optional[RoutingDecision] = None
 
 
 class DocumentPipeline:
@@ -46,10 +49,9 @@ class DocumentPipeline:
         if run_id is None:
             run_id = generate_run_id()
 
-        # 1. Intake inspection
+        # Level 1: Intake inspection & Document Parsing
         source_doc, profile = self.inspector.inspect(pdf_path)
 
-        # 2. Route & parse
         outcome = self.router.route_and_parse(
             source_doc, profile, enable_fallback=self.config.fallback_enabled
         )
@@ -59,39 +61,73 @@ class DocumentPipeline:
             return PipelineResult(
                 document_id=source_doc.document_id,
                 pdf_profile=profile.pdf_profile.value,
-                selected_parser=outcome.routing_decision.selected_parser,
+                selected_parser=outcome.routing_decision.actual_parser,
                 document_family="unknown",
                 validation_status="failed",
                 requires_review=True,
                 database_path=str(self.paths.database_file),
+                routing_decision=outcome.routing_decision,
             )
 
         doc_ir = parse_res.document_ir
 
-        # 3. Classify
+        # Level 2: Business Interpretation
         classification = self.classifier.classify(doc_ir)
-
-        # 4. Map to envelope
         envelope = self.mapper.map_to_envelope(doc_ir, classification)
-
-        # 5. Validate
         validation_res = self.validator.validate(envelope)
+        completeness = self.mapper.evaluate_completeness(envelope, doc_ir)
 
-        # 6. Store in DuckDB
-        self.storage.store_document(envelope, validation_res, run_id=run_id)
+        # Semantic Fallback Loop: check if completeness or critical missing fields trigger semantic fallback
+        if (
+            completeness.requires_review
+            and outcome.fallback_result is not None
+            and outcome.fallback_result.success
+            and outcome.fallback_result.document_ir
+        ):
+            # Try interpreting fallback DocumentIR
+            fb_ir = outcome.fallback_result.document_ir
+            fb_class = self.classifier.classify(fb_ir)
+            fb_env = self.mapper.map_to_envelope(fb_ir, fb_class)
+            fb_val = self.validator.validate(fb_env)
+            fb_comp = self.mapper.evaluate_completeness(fb_env, fb_ir)
 
-        val_status = "accepted" if validation_res.is_valid and not validation_res.requires_review else "review_required"
+            if fb_comp.completeness_score > completeness.completeness_score:
+                doc_ir = fb_ir
+                classification = fb_class
+                envelope = fb_env
+                validation_res = fb_val
+                completeness = fb_comp
+                outcome.routing_decision.selection_reason = (
+                    "Selected fallback parser result due to higher semantic completeness score "
+                    f"({fb_comp.completeness_score:.2f} vs {completeness.completeness_score:.2f})."
+                )
+
+        # Store in DuckDB Storage V2
+        self.storage.store_document(
+            envelope=envelope,
+            validation=validation_res,
+            routing_decision=outcome.routing_decision,
+            completeness=completeness,
+            run_id=run_id,
+        )
+
+        requires_review = (
+            validation_res.requires_review or completeness.requires_review
+        )
+        val_status = "accepted" if validation_res.is_valid and not requires_review else "review_required"
 
         return PipelineResult(
             document_id=source_doc.document_id,
             pdf_profile=profile.pdf_profile.value,
-            selected_parser=outcome.routing_decision.selected_parser,
+            selected_parser=outcome.routing_decision.actual_parser,
             document_family=classification.document_family.value,
             validation_status=val_status,
-            requires_review=validation_res.requires_review,
+            requires_review=requires_review,
             database_path=str(self.paths.database_file),
             envelope=envelope,
             validation=validation_res,
+            completeness=completeness,
+            routing_decision=outcome.routing_decision,
         )
 
     def process_folder(
@@ -102,8 +138,6 @@ class DocumentPipeline:
 
         summary = ProcessingSummary(received=len(pdf_files))
         results: List[PipelineResult] = []
-
-        seen_sha256 = set()
 
         for pdf_file in pdf_files:
             try:
@@ -119,7 +153,7 @@ class DocumentPipeline:
                 if res.document_family == "unknown":
                     summary.unknown += 1
 
-            except Exception as e:
+            except Exception:
                 summary.failed += 1
 
         return summary, results

@@ -81,6 +81,19 @@ class BusinessValidator:
                     )
                 )
 
+        # Evidence requirement check: Every accepted candidate should have evidence
+        for f_name, candidate in envelope.field_candidates.items():
+            if candidate.value is not None and not candidate.evidence_references:
+                issues.append(
+                    ValidationIssue(
+                        code="MISSING_EVIDENCE_FOR_FIELD",
+                        severity=ValidationSeverity.WARNING,
+                        field_path=f"field_candidates.{f_name}",
+                        message=f"Extracted field '{f_name}' has no backing evidence reference.",
+                        review_required=True,
+                    )
+                )
+
         # Family specific checks
         if isinstance(payload, SalesInvoicePayload):
             self._validate_sales_invoice(payload, issues)
@@ -112,7 +125,7 @@ class BusinessValidator:
         if line_items:
             calculated_subtotal = Decimal("0.00")
             for idx, item in enumerate(line_items):
-                if item.quantity is not None and item.unit_price is not None:
+                if item.quantity is not None and item.unit_price is not None and item.amount is not None:
                     calc_amount = item.quantity * item.unit_price
                     diff = abs(calc_amount - item.amount)
                     if diff > self.tolerance:
@@ -127,9 +140,10 @@ class BusinessValidator:
                                 review_required=True,
                             )
                         )
-                calculated_subtotal += item.amount
+                if item.amount is not None:
+                    calculated_subtotal += item.amount
 
-            if common.subtotal is not None:
+            if common.subtotal is not None and calculated_subtotal > Decimal("0.00"):
                 diff_sub = abs(calculated_subtotal - common.subtotal)
                 if diff_sub > self.tolerance:
                     issues.append(
@@ -148,27 +162,31 @@ class BusinessValidator:
         self, payload: UtilityConsumptionInvoicePayload, issues: List[ValidationIssue]
     ) -> None:
         for idx, meter in enumerate(payload.meter_readings):
-            calc_consumption = (
-                meter.closing_reading - meter.opening_reading
-            ) * meter.conversion_factor
-            diff = abs(calc_consumption - meter.consumption)
-            if diff > self.tolerance:
-                issues.append(
-                    ValidationIssue(
-                        code="METER_CONSUMPTION_MISMATCH",
-                        severity=ValidationSeverity.ERROR,
-                        field_path=f"meter_readings[{idx}].consumption",
-                        message=f"Meter {idx + 1} consumption math mismatch: ({meter.closing_reading} - {meter.opening_reading}) * {meter.conversion_factor} = {calc_consumption}, actual={meter.consumption}",
-                        expected=str(calc_consumption),
-                        actual=str(meter.consumption),
-                        review_required=True,
+            if (
+                meter.closing_reading is not None
+                and meter.opening_reading is not None
+                and meter.consumption is not None
+            ):
+                factor = meter.conversion_factor or Decimal("1.0")
+                calc_consumption = (meter.closing_reading - meter.opening_reading) * factor
+                diff = abs(calc_consumption - meter.consumption)
+                if diff > self.tolerance:
+                    issues.append(
+                        ValidationIssue(
+                            code="METER_CONSUMPTION_MISMATCH",
+                            severity=ValidationSeverity.ERROR,
+                            field_path=f"meter_readings[{idx}].consumption",
+                            message=f"Meter {idx + 1} consumption math mismatch: ({meter.closing_reading} - {meter.opening_reading}) * {factor} = {calc_consumption}, actual={meter.consumption}",
+                            expected=str(calc_consumption),
+                            actual=str(meter.consumption),
+                            review_required=True,
+                        )
                     )
-                )
 
     def _validate_tax_certificate(
         self, payload: TaxWithholdingCertificatePayload, issues: List[ValidationIssue]
     ) -> None:
-        if payload.withheld_tax < Decimal("0.00"):
+        if payload.withheld_tax is not None and payload.withheld_tax < Decimal("0.00"):
             issues.append(
                 ValidationIssue(
                     code="NEGATIVE_WITHHELD_TAX",
