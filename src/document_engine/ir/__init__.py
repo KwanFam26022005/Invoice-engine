@@ -1,0 +1,43 @@
+"""Common Document IR exports."""
+
+from document_engine.ir.models import (
+    BlockIR,
+    DocumentIR,
+    DocumentParseResult,
+    DocumentProfile,
+    EvidenceReference,
+    Geometry,
+    PageIR,
+    ParseWarning,
+    ParserProvenance,
+    SourceDocument,
+    TableCellIR,
+    TableIR,
+    generate_block_id,
+    generate_cell_id,
+    generate_document_id,
+    generate_page_id,
+    generate_run_id,
+    generate_table_id,
+)
+
+__all__ = [
+    "BlockIR",
+    "DocumentIR",
+    "DocumentParseResult",
+    "DocumentProfile",
+    "EvidenceReference",
+    "Geometry",
+    "PageIR",
+    "ParseWarning",
+    "ParserProvenance",
+    "SourceDocument",
+    "TableCellIR",
+    "TableIR",
+    "generate_block_id",
+    "generate_cell_id",
+    "generate_document_id",
+    "generate_page_id",
+    "generate_run_id",
+    "generate_table_id",
+]

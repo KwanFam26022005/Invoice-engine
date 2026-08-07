@@ -1,0 +1,19 @@
+# Universal Document Engine Application Configuration
+database_name: "document_engine.duckdb"
+
+default_parser_policy:
+  native_pdf: "pymupdf_native"
+  scan_pdf: "docling_ocr"
+  mixed_pdf: "docling_ocr"
+  fallback: "paddleocr_vl"
+
+fallback_enabled: true
+max_pages: 200
+max_file_size_mb: 100.0
+batch_concurrency: 1
+validation_tolerance: 0.01
+
+excel_options:
+  sanitize_formulas: true
+  auto_filter: true
+  freeze_panes: true
