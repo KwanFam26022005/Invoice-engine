@@ -138,12 +138,12 @@ def test_failed_parser_attempt_persistence(tmp_path: Path):
     primary = DocumentParseResult(success=False, error_message="primary unavailable")
     fallback = DocumentParseResult(success=False, error_message="fallback unavailable")
     decision = RoutingDecision(
-        requested_parser="primary_parser",
-        actual_parser="primary_parser",
+        requested_parser="docling_ocr",
+        actual_parser="paddleocr_vl",
         selection_reason="both failed",
         fallback_trigger="Primary parser unavailable; fallback attempted.",
-        fallback_requested_parser="fallback_parser",
-        fallback_actual_parser="fallback_parser",
+        fallback_requested_parser="paddleocr_vl",
+        fallback_actual_parser="paddleocr_vl",
     )
     outcome = ParserRoutingOutcome(
         primary_result=primary,
@@ -172,6 +172,6 @@ def test_failed_parser_attempt_persistence(tmp_path: Path):
     assert row_doc[0] == "failed"
     assert row_doc[1] == "corrupted.pdf"
     assert attempts == [
-        ("primary_parser", "primary_parser", 1, None, False, None, False),
-        ("fallback_parser", "fallback_parser", 2, "primary_unavailable", False, None, True),
+        ("docling_ocr", "docling_ocr", 1, None, False, None, False),
+        ("paddleocr_vl", "paddleocr_vl", 2, "primary_unavailable", False, None, True),
     ]

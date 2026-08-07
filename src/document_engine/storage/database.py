@@ -436,7 +436,7 @@ class DuckDBStorage:
         p_res = routing_outcome.primary_result
         p_prov = p_res.document_ir.provenance if (p_res and p_res.document_ir) else None
         p_exec_time = p_prov.execution_time_seconds if (p_prov and p_prov.execution_time_seconds is not None) else None
-        p_actual = p_prov.parser_id if p_prov else decision.actual_parser
+        p_actual = p_prov.parser_id if p_prov else decision.requested_parser
         p_selected = (routing_outcome.selected_result == p_res)
         p_qual_json = decision.quality_report.model_dump_json() if (p_selected and decision.quality_report) else None
 

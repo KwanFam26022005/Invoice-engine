@@ -4,7 +4,7 @@ from decimal import Decimal
 from document_engine.core.models import DocumentFamilyType, SourceFormatType
 from document_engine.evaluation.audit_models import DocumentAuditSpec, FieldAuditEntry, FieldAuditStatus
 from document_engine.evaluation.comparator import compare_values
-from document_engine.evaluation.metrics import Evaluator
+from document_engine.evaluation.metrics import DocumentEvaluationSummary, Evaluator
 from document_engine.orchestration.pipeline import PipelineResult
 from document_engine.schemas.family_schemas import (
     BusinessDocumentEnvelope,
@@ -203,3 +203,37 @@ def test_aggregate_evidence_coverage_total_fields():
     assert agg.total_audited_fields == 4
     assert agg.total_evidence_supported_fields == 1
     assert agg.overall_evidence_coverage == 0.25
+
+
+def test_aggregate_audited_documents_requires_confirmed_fields():
+    evaluator = Evaluator()
+    summaries = [
+        DocumentEvaluationSummary(
+            document_id="doc-a",
+            family="sales_invoice",
+            pdf_profile="native_pdf",
+            selected_parser="synthetic",
+            validation_status="accepted",
+            audited_field_count=2,
+        ),
+        DocumentEvaluationSummary(
+            document_id="doc-b",
+            family="sales_invoice",
+            pdf_profile="native_pdf",
+            selected_parser="synthetic",
+            validation_status="accepted",
+            audited_field_count=0,
+        ),
+        DocumentEvaluationSummary(
+            document_id="doc-c",
+            family="unknown",
+            pdf_profile="native_pdf",
+            selected_parser="synthetic",
+            validation_status="failed",
+            audited_field_count=0,
+        ),
+    ]
+
+    report = evaluator.aggregate_summaries(summaries)
+
+    assert report.audited_documents == 1

@@ -170,7 +170,9 @@ class Evaluator:
         self, summaries: List[DocumentEvaluationSummary]
     ) -> AggregateEvaluationReport:
         report = AggregateEvaluationReport()
-        report.audited_documents = len(summaries)
+        report.audited_documents = sum(
+            1 for summary in summaries if summary.audited_field_count > 0
+        )
 
         cat_counts: Dict[str, int] = {}
         family_stats: Dict[str, Dict[str, Any]] = {}
