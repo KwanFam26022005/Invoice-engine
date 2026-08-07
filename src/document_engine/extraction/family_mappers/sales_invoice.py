@@ -2,7 +2,13 @@
 
 from typing import Dict, List, Tuple
 
-from document_engine.extraction.evidence import find_anchor_value, find_table_evidence, find_text_evidence, resolve_semantic_columns
+from document_engine.extraction.evidence import (
+    find_anchor_value,
+    find_table_evidence,
+    find_text_evidence,
+    resolve_semantic_columns,
+    semantic_columns_are_ambiguous,
+)
 from document_engine.extraction.normalizer import normalize_tax_id, parse_date, parse_decimal
 from document_engine.ir.models import DocumentIR
 from document_engine.schemas.family_schemas import (
@@ -21,11 +27,16 @@ class SalesInvoiceMapper:
         field_candidates: Dict[str, FieldCandidate] = {}
 
         # 1. Document Number
-        doc_num, doc_ev = find_text_evidence(
-            document_ir, r"(?:số|so|invoice no|no\.?)\s*:\s*([A-Za-z0-9\/\-]+)"
+        doc_num, doc_ev = find_anchor_value(
+            document_ir,
+            r"(?:số hóa đơn|so hoa don|invoice (?:no|number)|(?:^|\n)\s*(?:số|so)\s*:)",
+            r"[A-Za-z0-9/\-]+",
         )
         if doc_num:
             field_candidates["document_number"] = FieldCandidate(
+                value=doc_num, raw_value=doc_num, evidence_references=doc_ev
+            )
+            field_candidates["common.document_number"] = FieldCandidate(
                 value=doc_num, raw_value=doc_num, evidence_references=doc_ev
             )
 
@@ -44,6 +55,9 @@ class SalesInvoiceMapper:
             field_candidates["issue_date"] = FieldCandidate(
                 value=norm_date, raw_value=raw_date, evidence_references=date_ev
             )
+            field_candidates["common.issue_date"] = FieldCandidate(
+                value=norm_date, raw_value=raw_date, evidence_references=date_ev
+            )
 
         # 4. Seller & Buyer
         seller_tax, _seller_tax_ev = find_text_evidence(
@@ -55,8 +69,12 @@ class SalesInvoiceMapper:
 
         seller = Party(tax_id=normalize_tax_id(seller_tax)[0] if seller_tax else None)
         buyer = Party(tax_id=normalize_tax_id(buyer_tax)[0] if buyer_tax else None)
-        seller_name, seller_name_ev = find_anchor_value(document_ir, r"(?:đơn vị bán hàng|tên đơn vị bán hàng|người bán)")
-        buyer_name, buyer_name_ev = find_anchor_value(document_ir, r"(?:người mua hàng|đơn vị mua hàng|tên đơn vị mua hàng)")
+        seller_name, seller_name_ev = find_anchor_value(
+            document_ir, r"(?:tên đơn vị bán hàng|đơn vị bán hàng|người bán)"
+        )
+        buyer_name, buyer_name_ev = find_anchor_value(
+            document_ir, r"(?:tên đơn vị mua hàng|đơn vị mua hàng|người mua hàng)"
+        )
         seller.name = seller_name
         buyer.name = buyer_name
         if seller_name:
@@ -65,13 +83,19 @@ class SalesInvoiceMapper:
             field_candidates["common.buyer.name"] = FieldCandidate(value=buyer_name, raw_value=buyer_name, evidence_references=buyer_name_ev)
 
         # 5. Grand Total
-        grand_raw, grand_ev = find_text_evidence(
+        grand_raw, grand_ev = find_anchor_value(
             document_ir,
-            r"(?:tổng cộng|tong cong|total|tổng tiền thanh toán|tong tien thanh toan)\s*:\s*([\d\.,\s]+)",
+            r"(?:tổng tiền phải thanh toán|tong tien phai thanh toan|"
+            r"tổng tiền thanh toán|tong tien thanh toan|tổng thanh toán|"
+            r"tong thanh toan|tổng cộng|tong cong|grand total)",
+            r"[\d., ]+(?:\s*(?:đ|vnd))?",
         )
         grand_total = parse_decimal(grand_raw)[0] if grand_raw else None
         if grand_total is not None:
             field_candidates["grand_total"] = FieldCandidate(
+                value=str(grand_total), raw_value=grand_raw, evidence_references=grand_ev
+            )
+            field_candidates["common.grand_total"] = FieldCandidate(
                 value=str(grand_total), raw_value=grand_raw, evidence_references=grand_ev
             )
 
@@ -81,6 +105,8 @@ class SalesInvoiceMapper:
             for table in page.tables:
                 if table.row_count > 1:
                     header_columns = resolve_semantic_columns(table)
+                    if semantic_columns_are_ambiguous(table):
+                        continue
                     rows_dict: Dict[int, Dict[int, str]] = {}
                     cells_obj: Dict[Tuple[int, int], any] = {}
                     for c in table.cells:

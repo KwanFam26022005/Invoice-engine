@@ -1,11 +1,17 @@
 """Utility Consumption Invoice specialized family mapper."""
 
 from decimal import Decimal
+import re
 from typing import Dict, List, Tuple
 
-from document_engine.extraction.evidence import find_text_evidence, resolve_semantic_columns
+from document_engine.extraction.evidence import (
+    find_anchor_value,
+    find_text_evidence,
+    resolve_semantic_columns,
+    semantic_columns_are_ambiguous,
+)
 from document_engine.extraction.normalizer import parse_date, parse_decimal
-from document_engine.ir.models import DocumentIR
+from document_engine.ir.models import BlockIR, DocumentIR, EvidenceReference
 from document_engine.schemas.family_schemas import (
     CommonDocumentFields,
     FieldCandidate,
@@ -21,7 +27,17 @@ class UtilityConsumptionMapper:
     ) -> Tuple[UtilityConsumptionInvoicePayload, Dict[str, FieldCandidate]]:
         field_candidates: Dict[str, FieldCandidate] = {}
 
-        doc_num, doc_ev = find_text_evidence(document_ir, r"(?:số hóa đơn|so hoa don|invoice no|số|so)\s*:\s*([A-Za-z0-9/\-]+)")
+        doc_num, doc_ev = find_anchor_value(
+            document_ir,
+            r"(?:số hóa đơn|so hoa don|invoice (?:no|number))",
+            r"[A-Za-z0-9/\-]+",
+        )
+        if not doc_num and re.search(r"(?:hóa đơn|hoa don|invoice)", document_ir.full_text, re.IGNORECASE):
+            doc_num, doc_ev = find_anchor_value(
+                document_ir,
+                r"(?:^|\n)\s*(?:số|so)\s*:",
+                r"[A-Za-z0-9/\-]+",
+            )
         date_raw, date_ev = find_text_evidence(document_ir, r"(?:ngày|ngay|date)\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{4}|\d{1,2}\s*tháng\s*\d{1,2}\s*năm\s*\d{4})")
         issue_date = parse_date(date_raw)[0] if date_raw else None
         if doc_num:
@@ -30,11 +46,16 @@ class UtilityConsumptionMapper:
             field_candidates["common.issue_date"] = FieldCandidate(value=issue_date, raw_value=date_raw, evidence_references=date_ev)
 
         # 1. Billing Period
-        period_raw, period_ev = find_text_evidence(
-            document_ir, r"(?:kỳ thanh toán|ky thanh toan|billing period)\s*:\s*([^\n]+)"
+        period_raw, period_ev = find_anchor_value(
+            document_ir,
+            r"(?:kỳ thanh toán|ky thanh toan|billing period)",
+            r"[^\n]+",
         )
         if period_raw:
             field_candidates["billing_period"] = FieldCandidate(
+                value=period_raw, raw_value=period_raw, evidence_references=period_ev
+            )
+            field_candidates["common.billing_period"] = FieldCandidate(
                 value=period_raw, raw_value=period_raw, evidence_references=period_ev
             )
 
@@ -91,6 +112,8 @@ class UtilityConsumptionMapper:
             for table in page.tables:
                 if table.row_count > 1:
                     header_columns = resolve_semantic_columns(table)
+                    if semantic_columns_are_ambiguous(table):
+                        continue
                     rows_dict: Dict[int, Dict[int, str]] = {}
                     for c in table.cells:
                         rows_dict.setdefault(c.row_index, {})[c.col_index] = c.text
@@ -126,13 +149,24 @@ class UtilityConsumptionMapper:
                             )
                         )
 
+        if not pricing_tiers:
+            pricing_tiers, pricing_candidates = self._reconstruct_pricing_rows(document_ir)
+            field_candidates.update(pricing_candidates)
+
         # 6. Grand Total
-        grand_raw, grand_ev = find_text_evidence(
-            document_ir, r"(?:tổng cộng|tong cong|total)\s*:\s*([\d\.,\s]+)"
+        grand_raw, grand_ev = find_anchor_value(
+            document_ir,
+            r"(?:tổng tiền phải thanh toán|tong tien phai thanh toan|"
+            r"tổng tiền thanh toán|tong tien thanh toan|tổng thanh toán|"
+            r"tong thanh toan|tổng cộng|tong cong|grand total)",
+            r"[\d., ]+(?:\s*(?:đ|vnd))?",
         )
         grand_total = parse_decimal(grand_raw)[0] if grand_raw else None
         if grand_total is not None:
             field_candidates["grand_total"] = FieldCandidate(
+                value=str(grand_total), raw_value=grand_raw, evidence_references=grand_ev
+            )
+            field_candidates["common.grand_total"] = FieldCandidate(
                 value=str(grand_total), raw_value=grand_raw, evidence_references=grand_ev
             )
 
@@ -152,3 +186,82 @@ class UtilityConsumptionMapper:
             pricing_tiers=pricing_tiers,
         )
         return payload, field_candidates
+
+    @staticmethod
+    def _reconstruct_pricing_rows(
+        document_ir: DocumentIR,
+    ) -> Tuple[List[PricingTier], Dict[str, FieldCandidate]]:
+        """Conservatively reconstruct simple OCR pricing rows without TableIR."""
+        tiers: List[PricingTier] = []
+        candidates: Dict[str, FieldCandidate] = {}
+        section_pattern = re.compile(
+            r"(?:chi tiết (?:giá|thanh toán)|bảng giá|bang gia|pricing)",
+            re.IGNORECASE,
+        )
+        unit_pattern = re.compile(r"(?:m3|m³|kwh)", re.IGNORECASE)
+
+        for page in document_ir.pages:
+            blocks = [block for block in page.blocks if block.text.strip()]
+            section_index = next(
+                (index for index, block in enumerate(blocks) if section_pattern.search(block.text)),
+                None,
+            )
+            if section_index is None:
+                continue
+
+            index = section_index + 1
+            while index + 4 < len(blocks):
+                row_blocks = blocks[index : index + 5]
+                description, unit, quantity, unit_price, amount = (
+                    block.text.strip() for block in row_blocks
+                )
+                if not description or not unit_pattern.fullmatch(unit):
+                    break
+                quantity_dec = parse_decimal(quantity)[0]
+                unit_price_dec = parse_decimal(unit_price)[0]
+                amount_dec = parse_decimal(amount)[0]
+                if None in (quantity_dec, unit_price_dec, amount_dec):
+                    break
+
+                tier_index = len(tiers)
+                tiers.append(
+                    PricingTier(
+                        tier_name=description,
+                        quantity=quantity_dec,
+                        unit=unit,
+                        unit_price=unit_price_dec,
+                        amount=amount_dec,
+                    )
+                )
+                for field_name, value, block in zip(
+                    ("tier_name", "quantity", "unit_price", "amount"),
+                    (description, str(quantity_dec), str(unit_price_dec), str(amount_dec)),
+                    (row_blocks[0], row_blocks[2], row_blocks[3], row_blocks[4]),
+                ):
+                    candidates[f"pricing_tiers[{tier_index}].{field_name}"] = FieldCandidate(
+                        value=value,
+                        raw_value=block.text.strip(),
+                        evidence_references=[
+                            _block_evidence(document_ir, page.page_number, block)
+                        ],
+                    )
+                index += 5
+
+            if tiers:
+                break
+        return tiers, candidates
+
+
+def _block_evidence(
+    document_ir: DocumentIR, page_number: int, block: BlockIR
+) -> EvidenceReference:
+    """Build provenance for a value reconstructed directly from one BlockIR."""
+    return EvidenceReference(
+        document_id=document_ir.document_id,
+        page_number=page_number,
+        block_id=block.block_id,
+        bbox=block.geometry.bbox if block.geometry else None,
+        source_text=block.text.strip(),
+        parser_id=document_ir.provenance.parser_id,
+        parser_version=document_ir.provenance.parser_version,
+    )

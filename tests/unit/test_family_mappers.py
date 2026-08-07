@@ -210,6 +210,36 @@ def test_sales_mapper_uses_semantic_headers_with_leading_code_columns():
     assert payload.line_items[0].amount == Decimal(1000)
 
 
+def test_sales_mapper_uses_six_column_semantic_headers_without_ordinal_shift():
+    headers = ["STT", "Description", "Unit", "Quantity", "Unit Price", "Amount"]
+    row = ["1", "Synthetic service", "unit", "2", "500", "1000"]
+    cells = [
+        TableCellIR(cell_id=f"h{index}", row_index=0, col_index=index, text=text)
+        for index, text in enumerate(headers)
+    ] + [
+        TableCellIR(cell_id=f"r{index}", row_index=1, col_index=index, text=text)
+        for index, text in enumerate(row)
+    ]
+    table = TableIR(
+        table_id="sales-six-columns",
+        page_number=1,
+        row_count=2,
+        col_count=6,
+        cells=cells,
+    )
+
+    payload, _ = SalesInvoiceMapper().map(
+        _document_for_mapper("doc-sales-six-columns", [], [table])
+    )
+
+    item = payload.line_items[0]
+    assert item.description == "Synthetic service"
+    assert item.unit == "unit"
+    assert item.quantity == Decimal(2)
+    assert item.unit_price == Decimal(500)
+    assert item.amount == Decimal(1000)
+
+
 def test_sales_mapper_extracts_party_names_and_vietnamese_issue_date():
     block = BlockIR(
         block_id="sales-fields",
@@ -268,6 +298,123 @@ def test_utility_mapper_extracts_document_number_and_vietnamese_issue_date():
     assert payload.common.issue_date == "2026-08-07"
     assert candidates["common.document_number"].evidence_references
     assert candidates["common.issue_date"].evidence_references
+
+
+def test_sales_mapper_extracts_generic_document_total_and_party_values_by_boundary():
+    blocks = [
+        BlockIR(block_id="number-label", page_number=1, text="Invoice Number:"),
+        BlockIR(block_id="number", page_number=1, text="INV-FAKE-001"),
+        BlockIR(block_id="total-label", page_number=1, text="Grand total:"),
+        BlockIR(block_id="total", page_number=1, text="1,200 VND"),
+        BlockIR(block_id="seller-label", page_number=1, text="Tên đơn vị bán hàng:"),
+        BlockIR(block_id="seller", page_number=1, text="Fictional Seller\nNgười mua hàng:"),
+        BlockIR(block_id="buyer", page_number=1, text="Fictional Buyer"),
+    ]
+
+    payload, candidates = SalesInvoiceMapper().map(
+        _document_for_mapper("doc-sales-boundary", blocks)
+    )
+
+    assert payload.common.document_number == "INV-FAKE-001"
+    assert payload.common.grand_total == Decimal(1200)
+    assert payload.common.seller.name == "Fictional Seller"
+    assert payload.common.buyer.name == "Fictional Buyer"
+    assert candidates["common.document_number"].evidence_references[0].block_id == "number"
+    assert candidates["common.grand_total"].evidence_references[0].block_id == "total"
+    assert candidates["common.seller.name"].evidence_references[0].block_id == "seller"
+
+
+def test_utility_mapper_extracts_invoice_scoped_number_total_and_billing_period():
+    blocks = [
+        BlockIR(block_id="heading", page_number=1, text="Hóa đơn dịch vụ"),
+        BlockIR(block_id="number-label", page_number=1, text="Số:"),
+        BlockIR(block_id="number", page_number=1, text="UTILITY-FAKE-001"),
+        BlockIR(block_id="period-label", page_number=1, text="Kỳ thanh toán:"),
+        BlockIR(block_id="period", page_number=1, text="08/2026"),
+        BlockIR(block_id="total-label", page_number=1, text="Tổng thanh toán:"),
+        BlockIR(block_id="total", page_number=1, text="300 VND"),
+    ]
+
+    payload, candidates = UtilityConsumptionMapper().map(
+        _document_for_mapper("doc-utility-boundary", blocks)
+    )
+
+    assert payload.common.document_number == "UTILITY-FAKE-001"
+    assert payload.common.billing_period == "08/2026"
+    assert payload.common.grand_total == Decimal(300)
+    assert candidates["common.document_number"].evidence_references[0].block_id == "number"
+    assert candidates["billing_period"].evidence_references[0].block_id == "period"
+    assert candidates["common.grand_total"].evidence_references[0].block_id == "total"
+
+
+def test_utility_mapper_reconstructs_pricing_rows_from_conservative_block_sequence():
+    blocks = [
+        BlockIR(block_id="section", page_number=1, text="Bảng giá"),
+        BlockIR(block_id="description", page_number=1, text="Tier Fiction"),
+        BlockIR(block_id="unit", page_number=1, text="m3"),
+        BlockIR(block_id="quantity", page_number=1, text="3"),
+        BlockIR(block_id="price", page_number=1, text="100"),
+        BlockIR(block_id="amount", page_number=1, text="300"),
+    ]
+
+    payload, candidates = UtilityConsumptionMapper().map(
+        _document_for_mapper("doc-utility-fallback", blocks)
+    )
+
+    assert len(payload.pricing_tiers) == 1
+    assert payload.pricing_tiers[0].tier_name == "Tier Fiction"
+    assert payload.pricing_tiers[0].quantity == Decimal(3)
+    assert payload.pricing_tiers[0].amount == Decimal(300)
+    assert candidates["pricing_tiers[0].amount"].evidence_references[0].block_id == "amount"
+
+
+def test_utility_mapper_rejects_ambiguous_numeric_blocks_as_pricing_rows():
+    blocks = [
+        BlockIR(block_id="section", page_number=1, text="Bảng giá"),
+        BlockIR(block_id="description", page_number=1, text="Unrelated note"),
+        BlockIR(block_id="not-unit", page_number=1, text="unknown"),
+        BlockIR(block_id="one", page_number=1, text="3"),
+        BlockIR(block_id="two", page_number=1, text="100"),
+        BlockIR(block_id="three", page_number=1, text="300"),
+    ]
+
+    payload, candidates = UtilityConsumptionMapper().map(
+        _document_for_mapper("doc-utility-ambiguous", blocks)
+    )
+
+    assert payload.pricing_tiers == []
+    assert not any(key.startswith("pricing_tiers") for key in candidates)
+
+
+def test_tax_mapper_handles_spaced_ids_split_period_and_money_boundaries():
+    blocks = [
+        BlockIR(block_id="payer-label", page_number=1, text="[02] Mã số thuế"),
+        BlockIR(block_id="payer-id", page_number=1, text="0 1 0 1 2 3 4 5 6 7"),
+        BlockIR(block_id="recipient-label", page_number=1, text="[06] Mã số thuế"),
+        BlockIR(block_id="recipient-id", page_number=1, text="0 1 0 7 6 5 4 3 2 1"),
+        BlockIR(block_id="from-label", page_number=1, text="Từ tháng"),
+        BlockIR(block_id="from", page_number=1, text="2"),
+        BlockIR(block_id="to-label", page_number=1, text="đến tháng"),
+        BlockIR(block_id="to", page_number=1, text="5"),
+        BlockIR(block_id="year-label", page_number=1, text="năm"),
+        BlockIR(block_id="year", page_number=1, text="2026"),
+        BlockIR(block_id="taxable", page_number=1, text="Tổng thu nhập chịu thuế: 1000 VND\nKhác: 9"),
+        BlockIR(block_id="calculation", page_number=1, text="Tổng thu nhập tính thuế: 900 đ"),
+        BlockIR(block_id="withheld", page_number=1, text="Số thuế đã khấu trừ: 90 VND"),
+    ]
+
+    payload, candidates = TaxWithholdingMapper().map(
+        _document_for_mapper("doc-tax-boundary", blocks)
+    )
+
+    assert payload.income_paying_organization.tax_id == "0101234567"
+    assert payload.recipient.tax_id == "0107654321"
+    assert payload.payment_period == "2026-02/2026-05"
+    assert payload.total_taxable_income == Decimal(1000)
+    assert payload.total_tax_calculation_income == Decimal(900)
+    assert payload.withheld_tax == Decimal(90)
+    assert len(candidates["payment_period"].evidence_references) == 3
+    assert candidates["total_taxable_income"].evidence_references[0].source_text == "1000 VND"
 
 
 def _document_for_mapper(document_id, blocks, tables=None):

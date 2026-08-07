@@ -55,3 +55,39 @@ def test_anchor_value_does_not_use_a_value_from_the_next_page():
 
     assert value is None
     assert evidence == []
+
+
+def test_anchor_value_supports_same_line_next_line_and_next_block():
+    same_line = BlockIR(block_id="same", page_number=1, text="Code: VALUE")
+    next_line = BlockIR(block_id="line", page_number=1, text="Code:\nVALUE")
+    label = BlockIR(block_id="label", page_number=1, text="Code:")
+    value_block = BlockIR(block_id="value", page_number=1, text="VALUE")
+    for blocks, expected_block in (
+        ([same_line], "same"),
+        ([next_line], "line"),
+        ([label, value_block], "value"),
+    ):
+        value, evidence = find_anchor_value(
+            _document([PageIR(page_id="p", page_number=1, blocks=blocks)]),
+            r"code",
+            r"[A-Z]+",
+        )
+        assert value == "VALUE"
+        assert evidence[0].block_id == expected_block
+
+
+def test_anchor_value_stops_before_the_next_field_label_and_preserves_currency():
+    block = BlockIR(
+        block_id="amount",
+        page_number=1,
+        text="Total: 1,200 VND\nNext field: should-not-be-included",
+    )
+
+    value, evidence = find_anchor_value(
+        _document([PageIR(page_id="p", page_number=1, blocks=[block])]),
+        r"total",
+        r"[\d, ]+(?:\s*(?:vnd|đ))?",
+    )
+
+    assert value == "1,200 VND"
+    assert evidence[0].source_text == "1,200 VND"

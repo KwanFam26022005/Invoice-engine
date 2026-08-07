@@ -1,11 +1,10 @@
 """Tax Withholding Certificate specialized family mapper."""
 
-import re
 from typing import Dict, Tuple
 
 from document_engine.extraction.evidence import find_anchor_value
 from document_engine.extraction.normalizer import normalize_tax_id, parse_date, parse_decimal
-from document_engine.ir.models import DocumentIR
+from document_engine.ir.models import DocumentIR, EvidenceReference
 from document_engine.schemas.family_schemas import (
     CommonDocumentFields,
     FieldCandidate,
@@ -85,9 +84,7 @@ class TaxWithholdingMapper:
         sig_date_raw, sig_date_ev = find_anchor_value(document_ir, r"(?:ngày ký|ngay ky|signature date|ngày \(date\))", r"(?:\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{4}|(?:ngày\s*)?\d{1,2}\s*tháng\s*(?:\(month\)\s*)?\d{1,2}\s*năm\s*(?:\(year\)\s*)?\d{4})")
         sig_date = parse_date(sig_date_raw)[0] if sig_date_raw else None
         lookup_code, _lookup_ev = find_anchor_value(document_ir, r"(?:mã tra cứu|ma tra cuu|lookup code)", r"[A-Za-z0-9\-]+")
-        period_match = re.search(r"từ tháng\s*(\d{1,2}).{0,40}?đến tháng\s*(\d{1,2}).{0,40}?năm\s*(\d{4})", document_ir.full_text, re.IGNORECASE | re.DOTALL)
-        payment_period = f"{period_match.group(3)}-{int(period_match.group(1)):02d}/{period_match.group(3)}-{int(period_match.group(2)):02d}" if period_match else None
-        _period_month, period_ev = find_anchor_value(document_ir, r"từ tháng", r"\d{1,2}")
+        payment_period, period_ev = _find_payment_period(document_ir)
         if payment_period:
             field_candidates["payment_period"] = FieldCandidate(value=payment_period, raw_value=payment_period, evidence_references=period_ev)
         if sig_date:
@@ -119,3 +116,22 @@ class TaxWithholdingMapper:
             lookup_code=lookup_code,
         )
         return payload, field_candidates
+
+
+def _find_payment_period(
+    document_ir: DocumentIR,
+) -> Tuple[str | None, list[EvidenceReference]]:
+    """Extract an indexed Vietnamese payment period without crossing pages."""
+    start, start_ev = find_anchor_value(document_ir, r"từ tháng", r"\d{1,2}")
+    end, end_ev = find_anchor_value(document_ir, r"đến tháng", r"\d{1,2}")
+    year, year_ev = find_anchor_value(document_ir, r"năm", r"\d{4}")
+    evidence = [*start_ev, *end_ev, *year_ev]
+    if (
+        start
+        and end
+        and year
+        and len(evidence) == 3
+        and len({item.page_number for item in evidence}) == 1
+    ):
+        return f"{year}-{int(start):02d}/{year}-{int(end):02d}", evidence
+    return None, []

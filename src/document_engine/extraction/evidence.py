@@ -23,6 +23,12 @@ def resolve_semantic_columns(table: TableIR) -> dict[str, int]:
     return mapping
 
 
+def semantic_columns_are_ambiguous(table: TableIR) -> bool:
+    """Return whether distinct semantic concepts resolve to one column."""
+    mapping = resolve_semantic_columns(table)
+    return len(mapping) != len(set(mapping.values()))
+
+
 def find_text_evidence(
     document_ir: DocumentIR, regex_pattern: str
 ) -> Tuple[Optional[str], List[EvidenceReference]]:
@@ -52,18 +58,30 @@ def find_text_evidence(
 def find_anchor_value(
     document_ir: DocumentIR, anchor_pattern: str, value_pattern: str = r"[^\n]+"
 ) -> Tuple[Optional[str], List[EvidenceReference]]:
-    """Extract a same- or next-block value after a semantic anchor with evidence."""
+    """Extract a same-line or immediate next-block value after an anchor.
+
+    Values are deliberately limited to the first non-empty logical line.  This
+    prevents a following field label from becoming part of a text value while
+    retaining provenance for the block that actually supplied the value.
+    """
     anchor = re.compile(anchor_pattern, re.IGNORECASE)
-    value = re.compile(value_pattern)
+    value = re.compile(value_pattern, re.IGNORECASE)
     for page in document_ir.pages:
         blocks = [block for block in page.blocks if block.text.strip()]
         for index, block in enumerate(blocks):
             match = anchor.search(block.text)
             if not match:
                 continue
-            candidates = [(block, block.text[match.end():]), *[(item, item.text) for item in blocks[index + 1 : index + 3]]]
+            candidates = [(block, block.text[match.end():])]
+            if index + 1 < len(blocks):
+                candidates.append((blocks[index + 1], blocks[index + 1].text))
             for value_block, candidate in candidates:
-                found = value.search(candidate.lstrip(" :\t\n"))
+                candidate = candidate.lstrip(" :\t\n")
+                first_line = next(
+                    (line.strip() for line in candidate.splitlines() if line.strip()),
+                    "",
+                )
+                found = value.search(first_line)
                 if found:
                     raw = found.group(0).strip()
                     if raw:
