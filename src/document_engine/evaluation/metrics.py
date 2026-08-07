@@ -32,6 +32,7 @@ class DocumentEvaluationSummary(BaseModel):
     normalized_match_count: int = 0
     missing_prediction_count: int = 0
     wrong_value_count: int = 0
+    evidence_supported_count: int = 0
     evidence_coverage: float = 0.0
     field_results: List[FieldEvaluationResult] = Field(default_factory=list)
     failure_categories: List[FailureCategory] = Field(default_factory=list)
@@ -39,11 +40,12 @@ class DocumentEvaluationSummary(BaseModel):
 
 class AggregateEvaluationReport(BaseModel):
     audited_documents: int = 0
-    total_audited_fields: int = 0  # Confirmed denominator
+    total_audited_fields: int = 0  # Strictly CONFIRMED fields denominator
     exact_match_count: int = 0
     normalized_match_count: int = 0
     missing_prediction_count: int = 0
     wrong_value_count: int = 0
+    total_evidence_supported_fields: int = 0
     exact_match_rate: float = 0.0
     normalized_match_rate: float = 0.0
     overall_evidence_coverage: float = 0.0
@@ -97,9 +99,8 @@ class Evaluator:
         envelope = pipeline_result.envelope
 
         for f_path, audit_entry in audit_spec.fields.items():
-            if audit_entry.status == FieldAuditStatus.NOT_AUDITED:
-                continue
-            if audit_entry.status == FieldAuditStatus.AMBIGUOUS_SOURCE:
+            # STRICT REQUIREMENT 1: Only CONFIRMED audit status is included in audited denominator
+            if audit_entry.status != FieldAuditStatus.CONFIRMED:
                 continue
 
             audited_count += 1
@@ -123,8 +124,14 @@ class Evaluator:
 
             exact_m, norm_m = compare_values(expected, actual, f_path)
 
+            # STRICT REQUIREMENT 2: Independent Exact and Normalized Match counting
+            if exact_m:
+                exact_cnt += 1
+
             field_fail: Optional[FailureCategory] = None
-            if not norm_m:
+            if norm_m:
+                norm_cnt += 1
+            else:
                 if actual is None and expected is not None:
                     missing_cnt += 1
                     field_fail = FailureCategory.FIELD_NOT_EXTRACTED
@@ -132,9 +139,6 @@ class Evaluator:
                     wrong_cnt += 1
                     field_fail = FailureCategory.FIELD_WRONG_VALUE
                 failures.append(field_fail)
-            else:
-                exact_cnt += 1
-                norm_cnt += 1
 
             summary.field_results.append(
                 FieldEvaluationResult(
@@ -154,6 +158,7 @@ class Evaluator:
         summary.normalized_match_count = norm_cnt
         summary.missing_prediction_count = missing_cnt
         summary.wrong_value_count = wrong_cnt
+        summary.evidence_supported_count = evidence_supported_cnt
         summary.evidence_coverage = (
             evidence_supported_cnt / audited_count if audited_count > 0 else 0.0
         )
@@ -176,6 +181,7 @@ class Evaluator:
             report.normalized_match_count += s.normalized_match_count
             report.missing_prediction_count += s.missing_prediction_count
             report.wrong_value_count += s.wrong_value_count
+            report.total_evidence_supported_fields += s.evidence_supported_count
 
             # Tally categories
             for cat in s.failure_categories:
@@ -189,15 +195,19 @@ class Evaluator:
                     "audited_fields": 0,
                     "exact_matches": 0,
                     "normalized_matches": 0,
+                    "evidence_supported": 0,
                 }
             family_stats[fam]["doc_count"] += 1
             family_stats[fam]["audited_fields"] += s.audited_field_count
             family_stats[fam]["exact_matches"] += s.exact_match_count
             family_stats[fam]["normalized_matches"] += s.normalized_match_count
+            family_stats[fam]["evidence_supported"] += s.evidence_supported_count
 
         if report.total_audited_fields > 0:
             report.exact_match_rate = report.exact_match_count / report.total_audited_fields
             report.normalized_match_rate = report.normalized_match_count / report.total_audited_fields
+            # STRICT REQUIREMENT 3: Aggregate overall evidence coverage
+            report.overall_evidence_coverage = report.total_evidence_supported_fields / report.total_audited_fields
 
         report.failure_category_counts = cat_counts
         report.family_summaries = family_stats

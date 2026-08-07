@@ -1,6 +1,7 @@
 """Unit tests for versioned review workflow, correction history, and relational reprojection."""
 
 from decimal import Decimal
+import json
 from pathlib import Path
 
 from document_engine.core.models import DocumentFamilyType, SourceFormatType
@@ -75,3 +76,66 @@ def test_versioned_human_correction_and_reprojection(tmp_path: Path):
     assert row_corr[0] == "100.0"
     assert row_corr[1] == "120.0"
     assert row_corr[2] == "auditor_jane"
+
+
+def test_review_type_safety_validation_error(tmp_path: Path):
+    """Requirement 7: String '120.50' converts to Decimal, while invalid string 'abc' fails and creates no new version."""
+    from pydantic import ValidationError
+    import pytest
+
+    db_path = tmp_path / "test_type_safety.duckdb"
+    storage = DuckDBStorage(db_path)
+    review_mgr = ReviewManager(storage)
+
+    doc_id = "doc_test_ts_002"
+    payload = SalesInvoicePayload(
+        common=CommonDocumentFields(
+            document_number="INV-200",
+            grand_total=Decimal("100.0"),
+        ),
+        line_items=[],
+    )
+    envelope = BusinessDocumentEnvelope(
+        document_id=doc_id,
+        document_family=DocumentFamilyType.SALES_INVOICE,
+        source_format=SourceFormatType.ELECTRONIC_DOCUMENT,
+        payload=payload,
+    )
+
+    storage.store_document(envelope, ValidationResult(is_valid=True, requires_review=False))
+
+    # 1. String "120.50" -> Pydantic rehydrates to Decimal("120.50")
+    corr = review_mgr.apply_correction(
+        document_id=doc_id,
+        field_path="common.grand_total",
+        new_value="120.50",
+    )
+    assert corr.new_value == "120.50"
+    v2 = review_mgr.get_latest_canonical_version(doc_id)
+    assert v2["version_number"] == 2
+    rehydrated = BusinessDocumentEnvelope.model_validate(
+        {
+            "document_id": doc_id,
+            "document_family": DocumentFamilyType.SALES_INVOICE,
+            "source_format": SourceFormatType.ELECTRONIC_DOCUMENT,
+            "payload": json.loads(v2["canonical_payload_json"]),
+        }
+    )
+    assert rehydrated.payload.common.grand_total == Decimal("120.50")
+
+    # 2. Invalid string "abc" -> Pydantic raises ValidationError, rolls back, no v3 created
+    with pytest.raises(ValidationError):
+        review_mgr.apply_correction(
+            document_id=doc_id,
+            field_path="common.grand_total",
+            new_value="abc",
+        )
+
+    # Latest version MUST remain v2
+    v_after = review_mgr.get_latest_canonical_version(doc_id)
+    assert v_after["version_number"] == 2
+    with storage.get_connection() as conn:
+        correction_count = conn.execute(
+            "SELECT count(*) FROM review_corrections WHERE document_id = ?;", [doc_id]
+        ).fetchone()[0]
+    assert correction_count == 1

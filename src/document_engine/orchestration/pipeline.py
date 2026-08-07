@@ -84,6 +84,13 @@ class DocumentPipeline:
 
         parse_res = outcome.selected_result
         if not parse_res.success or parse_res.document_ir is None:
+            # STRICT REQUIREMENT 5: Persist failed document parser attempts without envelope
+            self.storage.store_failed_document(
+                source_doc=source_doc,
+                profile=profile,
+                routing_outcome=outcome,
+                run_id=run_id,
+            )
             return PipelineResult(
                 document_id=source_doc.document_id,
                 pdf_profile=profile.pdf_profile.value,
@@ -185,20 +192,36 @@ class DocumentPipeline:
         if run_id is None:
             run_id = generate_run_id()
 
-        self.storage.start_processing_run(run_id, total_documents=len(pdf_files))
+        total_files = len(pdf_files)
+        self.storage.start_processing_run(run_id, total_documents=total_files)
 
-        summary = ProcessingSummary(received=len(pdf_files))
+        # STRICT REQUIREMENT 4: Handle empty folder immediately
+        if total_files == 0:
+            self.storage.update_processing_run(
+                run_id=run_id,
+                processed_count=0,
+                accepted_count=0,
+                review_required_count=0,
+                failed_count=0,
+                status="completed",
+            )
+            return ProcessingSummary(received=0), []
+
+        summary = ProcessingSummary(received=total_files)
         results: List[PipelineResult] = []
 
         for pdf_file in pdf_files:
             try:
                 res = self.process_file(pdf_file, run_id=run_id)
                 results.append(res)
-                summary.processed += 1
+                if res.validation_status == "failed":
+                    summary.failed += 1
+                else:
+                    summary.processed += 1
 
                 if res.validation_status == "accepted":
                     summary.accepted += 1
-                elif res.requires_review:
+                elif res.requires_review or res.validation_status == "failed":
                     summary.review_required += 1
 
                 if res.document_family == "unknown":
@@ -207,6 +230,10 @@ class DocumentPipeline:
             except Exception:
                 summary.failed += 1
 
+            # STRICT REQUIREMENT 4: Handled count = processed + failed
+            handled_count = summary.processed + summary.failed
+            run_status = "completed" if handled_count == total_files else "running"
+
             # Update batch run progress in storage
             self.storage.update_processing_run(
                 run_id=run_id,
@@ -214,7 +241,7 @@ class DocumentPipeline:
                 accepted_count=summary.accepted,
                 review_required_count=summary.review_required,
                 failed_count=summary.failed,
-                status="running" if summary.processed < summary.received else "completed",
+                status=run_status,
             )
 
         return summary, results

@@ -118,7 +118,7 @@ class ReviewManager:
         reviewer: str = "human_reviewer",
         reason: str = "manual_correction",
     ) -> CorrectionRecord:
-        """Apply versioned human correction to canonical envelope, revalidate, and reproject relational tables."""
+        """Apply versioned human correction to canonical envelope with strict Pydantic rehydration and validation."""
         with self.db.get_connection() as conn:
             conn.execute("BEGIN TRANSACTION;")
             try:
@@ -146,8 +146,30 @@ class ReviewManager:
                 prev_ver_num = parent_ver_row[1] if parent_ver_row else 0
                 new_ver_num = prev_ver_num + 1
 
-                # Rehydrate envelope
-                payload_dict = json.loads(payload_json)
+                # 2. Rehydrate the current typed envelope, then export a mutable Python payload.
+                current_envelope_data = {
+                    "document_id": document_id,
+                    "document_family": family_str,
+                    "source_format": format_str,
+                    "payload": json.loads(payload_json),
+                }
+                if candidates_json:
+                    current_envelope_data["field_candidates"] = json.loads(candidates_json)
+                current_envelope = BusinessDocumentEnvelope.model_validate(current_envelope_data)
+                payload_dict = current_envelope.payload.model_dump(mode="python")
+
+                old_val = None
+                try:
+                    old_val = get_field_value(payload_dict, field_path)
+                except Exception:
+                    pass
+                old_val_str = str(old_val) if old_val is not None else None
+
+                # 3. Apply field path correction to payload dict
+                set_field_value(payload_dict, field_path, new_value)
+
+                # 4. STRICT REQUIREMENT 7: Rehydrate via Pydantic model_validate
+                # If new_value has invalid type (e.g. "abc" for Decimal), this raises ValidationError
                 envelope_dict = {
                     "document_id": document_id,
                     "document_family": family_str,
@@ -159,38 +181,27 @@ class ReviewManager:
 
                 envelope = BusinessDocumentEnvelope.model_validate(envelope_dict)
 
-                # Get old value string for correction record
-                old_val = None
-                try:
-                    old_val = get_field_value(envelope.payload, field_path)
-                except Exception:
-                    pass
-                old_val_str = str(old_val) if old_val is not None else None
-
-                # 2. Apply field path correction to envelope payload
-                set_field_value(envelope.payload, field_path, new_value)
-
-                # 3. Update field candidate tracking
+                # 5. Update field candidate tracking
                 if field_path in envelope.field_candidates:
                     cand = envelope.field_candidates[field_path]
-                    cand.value = new_value
+                    cand.value = get_field_value(envelope.payload, field_path)
                     cand.raw_value = str(new_value)
                     cand.extraction_method = "human_corrected"
                 else:
                     envelope.field_candidates[field_path] = FieldCandidate(
-                        value=new_value,
+                        value=get_field_value(envelope.payload, field_path),
                         raw_value=str(new_value),
                         extraction_method="human_corrected",
                     )
 
-                # 4. Rerun validator & completeness
+                # 6. Rerun validator & completeness
                 validation_res = self.validator.validate(envelope)
                 comp = self.mapper.evaluate_completeness(envelope)
 
                 new_comp_score = comp.completeness_score
                 new_payload_json = envelope.payload.model_dump_json()
 
-                # 5. Create new canonical_versions entry
+                # 7. Create new canonical_versions entry
                 new_ver_id = f"ver_{document_id}_{new_ver_num}"
                 conn.execute(
                     """
@@ -200,7 +211,7 @@ class ReviewManager:
                     [new_ver_id, document_id, new_ver_num, new_payload_json, reviewer, parent_ver_id],
                 )
 
-                # 6. Record correction
+                # 8. Record correction history
                 corr_id = f"corr_{document_id}_{int(datetime.now().timestamp())}_{new_ver_num}"
                 corr = CorrectionRecord(
                     correction_id=corr_id,
@@ -231,10 +242,10 @@ class ReviewManager:
                     ],
                 )
 
-                # 7. Relational Reprojection
+                # 9. Relational Reprojection
                 self.projector.project_and_store(conn, envelope, new_comp_score)
 
-                # 8. Update validation issues & review queue status
+                # 10. Update validation issues & review queue status
                 conn.execute("DELETE FROM validation_issues WHERE document_id = ?;", [document_id])
                 for idx, issue in enumerate(validation_res.issues):
                     conn.execute(

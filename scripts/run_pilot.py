@@ -1,4 +1,4 @@
-"""Script to run Private Real-Document Pilot (Phase 8 V2) with audit evaluation and failure taxonomy."""
+"""Script to run Private Real-Document Pilot (Phase 8 V2) with audit evaluation and privacy protections."""
 
 import argparse
 import json
@@ -29,7 +29,7 @@ def main():
 
     manifest_path = Path(args.manifest)
     if not manifest_path.exists():
-        print(f"Pilot manifest file not found: {manifest_path}")
+        print("Pilot manifest file not found.")
         print("To run private pilot, copy 'configs/pilot_manifest.example.yaml' to 'workspace/pilot/pilot_manifest.yaml' and set local PDF paths.")
         sys.exit(0)
 
@@ -61,12 +61,11 @@ def main():
         manual_audit = entry.get("manual_audit_status", "NOT_AUDITED")
 
         if not pdf_path.exists():
-            print(f"[{doc_id}] SKIPPED - File not found: {pdf_path.name}")
+            print(f"[{doc_id}] SKIPPED - File not found")
             doc_reports.append(
                 {
                     "document_id": doc_id,
                     "status": "SKIPPED_MISSING_FILE",
-                    "filename": pdf_path.name,
                     "manual_audit_status": manual_audit,
                 }
             )
@@ -84,7 +83,7 @@ def main():
                         audit_data = json.load(f_aud)
                         audit_spec = DocumentAuditSpec.model_validate(audit_data)
                 except Exception as e_aud:
-                    print(f"[{doc_id}] Warning loading audit spec: {e_aud}")
+                    print(f"[{doc_id}] Warning loading audit spec: {type(e_aud).__name__}")
 
             eval_summary = evaluator.evaluate_document(res, audit_spec)
             document_summaries.append(eval_summary)
@@ -101,7 +100,6 @@ def main():
 
             doc_rep = {
                 "document_id": doc_id,
-                "filename": pdf_path.name,
                 "profile": res.pdf_profile,
                 "expected_profile": expected_profile,
                 "profile_match": profile_match,
@@ -127,13 +125,14 @@ def main():
             )
 
         except Exception as err:
-            print(f"[{doc_id}] ERROR - {err}")
+            err_type = type(err).__name__
+            print(f"[{doc_id}] ERROR - {err_type}")
             doc_reports.append(
                 {
                     "document_id": doc_id,
-                    "filename": pdf_path.name,
                     "status": "ERROR",
-                    "error": str(err),
+                    "error_type": err_type,
+                    "safe_error_code": "PIPELINE_PROCESSING_ERROR",
                     "manual_audit_status": manual_audit,
                 }
             )
@@ -142,7 +141,6 @@ def main():
 
     final_report = {
         "run_id": run_id,
-        "manifest_path": str(manifest_path.name),
         "total_manifest_entries": len(documents),
         "processed_documents": len(document_summaries),
         "aggregate_metrics": aggregate_report.model_dump(),
@@ -153,7 +151,7 @@ def main():
     with open(report_file, "w", encoding="utf-8") as f_out:
         json.dump(final_report, f_out, indent=2, ensure_ascii=False)
 
-    print(f"\n=== Pilot Report Persisted: {report_file} ===")
+    print(f"\n=== Pilot Report Persisted: {report_file.name} ===")
     print(f"Processed: {len(document_summaries)} / {len(documents)}")
     print(f"Total Audited Fields (Confirmed Denominator): {aggregate_report.total_audited_fields}")
     print(f"Exact Match Rate: {aggregate_report.exact_match_rate:.2%}")
