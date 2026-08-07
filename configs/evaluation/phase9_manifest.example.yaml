@@ -1,0 +1,91 @@
+# Safe tracked example only. Real PDFs and audit values belong under ignored workspace/.
+manifest_version: "1.0"
+frozen_baseline_revision: "2eb4b3f7695ef6693369d732a8520fe243269d7a"
+
+documents:
+  - alias: sales_current_001
+    family: sales_invoice
+    cohort: current_pilot
+    expected_profile: scan_pdf
+    layout_group: sales_layout_a
+    source_ref: workspace/private/phase9/documents/sales_current_001.pdf
+    audit_ref: workspace/private/phase9/audit/sales_current_001.audit.json
+
+  - alias: utility_current_001
+    family: utility_consumption_invoice
+    cohort: current_pilot
+    expected_profile: scan_pdf
+    layout_group: utility_layout_a
+    source_ref: workspace/private/phase9/documents/utility_current_001.pdf
+    audit_ref: workspace/private/phase9/audit/utility_current_001.audit.json
+
+  - alias: tax_current_001
+    family: tax_withholding_certificate
+    cohort: current_pilot
+    expected_profile: native_pdf
+    layout_group: tax_layout_a
+    source_ref: workspace/private/phase9/documents/tax_current_001.pdf
+    audit_ref: workspace/private/phase9/audit/tax_current_001.audit.json
+
+  - alias: sales_holdout_001
+    family: sales_invoice
+    cohort: holdout_same_family
+    layout_group: sales_layout_b
+    source_ref: workspace/private/phase9/documents/sales_holdout_001.pdf
+    audit_ref: workspace/private/phase9/audit/sales_holdout_001.audit.json
+
+  - alias: sales_holdout_002
+    family: sales_invoice
+    cohort: holdout_same_family
+    layout_group: sales_layout_c
+    source_ref: workspace/private/phase9/documents/sales_holdout_002.pdf
+    audit_ref: workspace/private/phase9/audit/sales_holdout_002.audit.json
+
+  - alias: utility_holdout_001
+    family: utility_consumption_invoice
+    cohort: holdout_same_family
+    layout_group: utility_layout_b
+    source_ref: workspace/private/phase9/documents/utility_holdout_001.pdf
+    audit_ref: workspace/private/phase9/audit/utility_holdout_001.audit.json
+
+  - alias: utility_holdout_002
+    family: utility_consumption_invoice
+    cohort: holdout_same_family
+    layout_group: utility_layout_c
+    source_ref: workspace/private/phase9/documents/utility_holdout_002.pdf
+    audit_ref: workspace/private/phase9/audit/utility_holdout_002.audit.json
+
+  - alias: tax_holdout_001
+    family: tax_withholding_certificate
+    cohort: holdout_same_family
+    layout_group: tax_layout_b
+    source_ref: workspace/private/phase9/documents/tax_holdout_001.pdf
+    audit_ref: workspace/private/phase9/audit/tax_holdout_001.audit.json
+
+  - alias: sales_holdout_003
+    family: sales_invoice
+    cohort: holdout_same_family
+    layout_group: sales_layout_d
+    source_ref: workspace/private/phase9/documents/sales_holdout_003.pdf
+    audit_ref: workspace/private/phase9/audit/sales_holdout_003.audit.json
+
+  - alias: receipt_unknown_001
+    family: receipt
+    cohort: unknown_family
+    layout_group: receipt_layout_a
+    source_ref: workspace/private/phase9/documents/receipt_unknown_001.pdf
+    audit_ref: workspace/private/phase9/audit/receipt_unknown_001.audit.json
+
+  - alias: port_unknown_001
+    family: port_service_invoice
+    cohort: unknown_family
+    layout_group: port_layout_a
+    source_ref: workspace/private/phase9/documents/port_unknown_001.pdf
+    audit_ref: workspace/private/phase9/audit/port_unknown_001.audit.json
+
+  - alias: supporting_unknown_001
+    family: supporting_statement
+    cohort: unknown_family
+    layout_group: supporting_layout_a
+    source_ref: workspace/private/phase9/documents/supporting_unknown_001.pdf
+    audit_ref: workspace/private/phase9/audit/supporting_unknown_001.audit.json

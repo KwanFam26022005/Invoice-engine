@@ -1,0 +1,32 @@
+contract_version: "1.0"
+frozen_baseline_revision: "2eb4b3f7695ef6693369d732a8520fe243269d7a"
+minimum_documents: 12
+target_document_range: "12-20"
+minimum_layout_groups: 4
+
+required_cohorts:
+  - current_pilot
+  - holdout_same_family
+  - unknown_family
+
+required_metrics:
+  - exact_match
+  - normalized_match
+  - prediction_precision
+  - prediction_recall
+  - evidence_coverage
+  - evidence_grounded_precision
+  - unsupported_prediction_rate
+  - abstention_rate
+  - hallucination_count
+  - table_line_item_accuracy
+  - completeness
+  - validation_pass_rate
+  - review_rate
+  - runtime_seconds
+  - peak_rss_mb
+
+holdout_locked_before_engine_canary: true
+allow_holdout_tuning: false
+prefer_abstention_over_unsupported_prediction: true
+private_values_must_remain_outside_git: true
