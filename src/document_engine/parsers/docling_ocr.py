@@ -1,5 +1,6 @@
 """Docling OCR parser adapter for scanned & image-only PDFs via isolated worker."""
 
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -11,7 +12,7 @@ from document_engine.ir.models import (
 )
 from document_engine.parsers.base import DocumentParser, ParserHealth, ParserSpec
 from document_engine.parsers.docling_native import dict_to_document_ir
-from document_engine.runtime import WorkerClient, WorkerRequest, resolve_worker_python
+from document_engine.runtime import WorkerClient, WorkerRequest
 
 
 class DoclingOCRParser(DocumentParser):
@@ -41,25 +42,38 @@ class DoclingOCRParser(DocumentParser):
         return self._spec
 
     def healthcheck(self) -> ParserHealth:
-        import importlib.util
-
-        has_docling_in_base = (
-            importlib.util.find_spec("docling") is not None
-            and importlib.util.find_spec("easyocr") is not None
-        )
-        python_bin = resolve_worker_python(self.parser_id)
-        is_isolated = python_bin != Path(python_bin).name
-
-        if has_docling_in_base or is_isolated:
-            return ParserHealth(
-                parser_id=self.parser_id, healthy=True, message="Docling OCR available"
+        try:
+            req = WorkerRequest(
+                request_id="req_healthcheck_docling_ocr",
+                parser_id=self.parser_id,
+                operation="healthcheck",
+                allow_model_download=os.getenv("ALLOW_MODEL_DOWNLOAD") == "1",
             )
-        return ParserHealth(
-            parser_id=self.parser_id,
-            healthy=False,
-            message="Missing dependencies for Docling OCR in base and worker environments",
-            dependencies_available=False,
-        )
+            resp = self.worker_client.execute_worker(req)
+            if resp.success and resp.health_data:
+                return ParserHealth(
+                    parser_id=self.parser_id,
+                    healthy=True,
+                    message=f"Docling OCR worker ready ({resp.health_data.get('python_executable')})",
+                    dependencies_available=True,
+                )
+            return ParserHealth(
+                parser_id=self.parser_id,
+                healthy=False,
+                message=resp.error_message or "Docling OCR worker healthcheck failed",
+                dependencies_available=bool(
+                    resp.health_data
+                    and resp.health_data.get("docling_installed")
+                    and resp.health_data.get("easyocr_installed")
+                ),
+            )
+        except Exception as e:
+            return ParserHealth(
+                parser_id=self.parser_id,
+                healthy=False,
+                message=f"Docling OCR worker unavailable: {e}",
+                dependencies_available=False,
+            )
 
     def supports(self, profile: DocumentProfile) -> bool:
         return profile.pdf_profile in (

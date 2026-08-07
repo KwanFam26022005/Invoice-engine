@@ -165,8 +165,41 @@ def main():
 
         runtime_versions = get_runtime_versions()
 
-        # Check dependency availability
-        if importlib.util.find_spec("docling") is None:
+        operation = req_data.get("operation", "parse")
+        has_docling = importlib.util.find_spec("docling") is not None
+
+        if operation == "healthcheck":
+            has_easyocr = importlib.util.find_spec("easyocr") is not None
+            user_home = Path.home()
+            easyocr_model_dir = user_home / ".EasyOCR"
+            easyocr_cached = easyocr_model_dir.exists() and any(easyocr_model_dir.rglob("*.pth"))
+            runtime_ready = has_docling and (parser_id != "docling_ocr" or has_easyocr)
+            model_cache_ready = (
+                parser_id != "docling_ocr"
+                or easyocr_cached
+                or allow_model_download
+                or os.getenv("ALLOW_MODEL_DOWNLOAD") == "1"
+            )
+            resp = {
+                "request_id": req_id,
+                "success": runtime_ready and model_cache_ready,
+                "actual_parser_id": parser_id,
+                "actual_parser_version": runtime_versions.get("docling", "2.0.0"),
+                "runtime_versions": runtime_versions,
+                "health_data": {
+                    "python_executable": sys.executable,
+                    "docling_installed": has_docling,
+                    "docling_version": runtime_versions.get("docling"),
+                    "easyocr_installed": has_easyocr,
+                    "easyocr_version": runtime_versions.get("easyocr"),
+                    "model_cache_ready": model_cache_ready,
+                    "runtime_ready": runtime_ready,
+                },
+            }
+            print(json.dumps(resp), flush=True)
+            return
+
+        if not has_docling:
             resp = {
                 "request_id": req_id,
                 "success": False,

@@ -29,6 +29,16 @@ def test_worker_request_response_contracts():
     assert resp.actual_parser_id == "docling_native"
 
 
+def test_worker_request_healthcheck_operation():
+    req = WorkerRequest(
+        request_id="test_hc_001",
+        parser_id="paddleocr_vl",
+        operation="healthcheck",
+    )
+    assert req.operation == "healthcheck"
+    assert "operation" in req.model_dump_json()
+
+
 def test_resolve_worker_python():
     docling_python = resolve_worker_python("docling_native")
     assert docling_python is not None

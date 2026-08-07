@@ -25,6 +25,51 @@ def get_runtime_versions() -> dict:
     return versions
 
 
+def check_model_cache_status() -> str:
+    """Inspect local PaddleOCR model cache readiness."""
+    user_home = Path.home()
+    paddle_cache = user_home / ".paddleocr"
+    if not paddle_cache.exists():
+        return "CACHE_MISSING"
+
+    params_files = list(paddle_cache.rglob("*.pdiparams"))
+    if not params_files:
+        return "CACHE_MISSING"
+
+    # Check for structured subdirectories (e.g. layout, ocr, rec)
+    subdirs = [p for p in paddle_cache.iterdir() if p.is_dir()]
+    if len(params_files) >= 2 and len(subdirs) >= 1:
+        return "READY"
+
+    return "MODEL_CACHE_PARTIALLY_VERIFIED"
+
+
+def create_paddleocr_vl_pipeline(options: dict):
+    """Factory function for instantiating PaddleOCRVL pipeline."""
+    from paddleocr import PaddleOCRVL
+
+    kwargs = {
+        "pipeline_version": options.get("pipeline_version", "v1.6"),
+        "device": options.get("device", "cpu"),
+        "engine": options.get("engine", "paddle"),
+        "use_doc_orientation_classify": options.get(
+            "use_doc_orientation_classify", False
+        ),
+        "use_doc_unwarping": options.get("use_doc_unwarping", False),
+        "use_layout_detection": options.get("use_layout_detection", True),
+        "use_chart_recognition": options.get("use_chart_recognition", False),
+        "use_seal_recognition": options.get("use_seal_recognition", False),
+        "use_ocr_for_image_block": options.get("use_ocr_for_image_block", False),
+    }
+
+    if "layout_detection_model_dir" in options:
+        kwargs["layout_detection_model_dir"] = options["layout_detection_model_dir"]
+    if "vl_rec_model_dir" in options:
+        kwargs["vl_rec_model_dir"] = options["vl_rec_model_dir"]
+
+    return PaddleOCRVL(**kwargs)
+
+
 def build_page_ir_from_paddle(res_item, page_num: int, doc_id: str) -> dict:
     """Build per-page IR dictionary from PaddleOCR-VL res_item public result JSON."""
     page_id = f"{doc_id}_p{page_num:04d}"
@@ -32,7 +77,6 @@ def build_page_ir_from_paddle(res_item, page_num: int, doc_id: str) -> dict:
     tables = []
     page_texts = []
 
-    # Extract JSON dict from public result interface
     res_dict = {}
     if hasattr(res_item, "json"):
         json_attr = res_item.json
@@ -43,7 +87,6 @@ def build_page_ir_from_paddle(res_item, page_num: int, doc_id: str) -> dict:
     elif isinstance(res_item, dict):
         res_dict = res_item
 
-    # Standard public result JSON structure: {"res": {"width": ..., "height": ..., "parsing_res_list": [...]}}
     inner_res = res_dict.get("res", res_dict) if isinstance(res_dict, dict) else {}
 
     width = inner_res.get("width") if isinstance(inner_res, dict) else None
@@ -80,7 +123,7 @@ def build_page_ir_from_paddle(res_item, page_num: int, doc_id: str) -> dict:
             bbox = item.get("block_bbox", item.get("bbox", item.get("poly")))
             bbox_dict = None
             if bbox and isinstance(bbox, (list, tuple)) and len(bbox) >= 4:
-                if isinstance(bbox[0], (list, tuple)):  # polygon [[x0, y0], ...]
+                if isinstance(bbox[0], (list, tuple)):
                     xs = [p[0] for p in bbox]
                     ys = [p[1] for p in bbox]
                     bbox_dict = {
@@ -90,7 +133,7 @@ def build_page_ir_from_paddle(res_item, page_num: int, doc_id: str) -> dict:
                         "y1": float(max(ys)),
                         "page_number": page_num,
                     }
-                else:  # [x0, y0, x1, y1]
+                else:
                     bbox_dict = {
                         "x0": float(bbox[0]),
                         "y0": float(bbox[1]),
@@ -99,7 +142,6 @@ def build_page_ir_from_paddle(res_item, page_num: int, doc_id: str) -> dict:
                         "page_number": page_num,
                     }
 
-            # Handle structured table if cell layout is provided
             if label_str == "table" and ("table_cells" in item or "table_html" in item):
                 cells_raw = item.get("table_cells", [])
                 if cells_raw:
@@ -168,6 +210,7 @@ def main():
         req_data = json.loads(raw_input)
         req_id = req_data.get("request_id", "req_unknown")
         parser_id = req_data.get("parser_id", "paddleocr_vl")
+        operation = req_data.get("operation", "parse")
         input_path = req_data.get("input_path", "")
         doc_id = req_data.get("document_id", "doc_unknown")
         options = req_data.get("options", {})
@@ -178,8 +221,47 @@ def main():
         # Check dependencies
         has_paddle = importlib.util.find_spec("paddle") is not None
         has_paddleocr = importlib.util.find_spec("paddleocr") is not None
+        symbol_importable = False
+        if has_paddle and has_paddleocr:
+            try:
+                from paddleocr import PaddleOCRVL  # noqa: F401
+                symbol_importable = True
+            except Exception:
+                symbol_importable = False
 
-        if not (has_paddle and has_paddleocr):
+        cache_status = check_model_cache_status()
+        model_cache_ready = (
+            cache_status in ("READY", "MODEL_CACHE_PARTIALLY_VERIFIED")
+            or allow_model_download
+            or os.getenv("ALLOW_MODEL_DOWNLOAD") == "1"
+        )
+        runtime_ready = has_paddle and has_paddleocr and symbol_importable
+
+        # Handle healthcheck operation
+        if operation == "healthcheck":
+            resp = {
+                "request_id": req_id,
+                "success": runtime_ready and model_cache_ready,
+                "actual_parser_id": parser_id,
+                "actual_parser_version": runtime_versions.get("paddleocr", "3.0.0"),
+                "runtime_versions": runtime_versions,
+                "health_data": {
+                    "python_executable": sys.executable,
+                    "paddle_installed": has_paddle,
+                    "paddle_version": runtime_versions.get("paddle"),
+                    "paddleocr_installed": has_paddleocr,
+                    "paddleocr_version": runtime_versions.get("paddleocr"),
+                    "symbol_importable": symbol_importable,
+                    "model_cache_status": cache_status,
+                    "model_loaded": False,
+                    "runtime_ready": runtime_ready,
+                    "model_cache_ready": model_cache_ready,
+                },
+            }
+            print(json.dumps(resp), flush=True)
+            return
+
+        if not runtime_ready:
             resp = {
                 "request_id": req_id,
                 "success": False,
@@ -187,55 +269,47 @@ def main():
                 "actual_parser_version": "3.0.0",
                 "runtime_versions": runtime_versions,
                 "error_type": "PARSER_UNAVAILABLE",
-                "error_message": "Paddle / PaddleOCR dependency not installed in worker environment.",
+                "error_message": "Paddle / PaddleOCR dependency not installed or PaddleOCRVL symbol importable in worker environment.",
             }
             print(json.dumps(resp), flush=True)
             return
 
-        # Offline policy check for specific model artifacts
-        if not allow_model_download and os.getenv("ALLOW_MODEL_DOWNLOAD") != "1":
-            user_home = Path.home()
-            paddle_model_dir = user_home / ".paddleocr"
-            # Verify specific model artifacts exist
-            if not paddle_model_dir.exists() or not any(paddle_model_dir.rglob("*.pdiparams")):
-                resp = {
-                    "request_id": req_id,
-                    "success": False,
-                    "actual_parser_id": parser_id,
-                    "actual_parser_version": "3.0.0",
-                    "runtime_versions": runtime_versions,
-                    "error_type": "PARSER_UNAVAILABLE",
-                    "error_message": "PaddleOCR required model artifacts (.pdiparams) not found in cache and ALLOW_MODEL_DOWNLOAD is not set.",
-                }
-                print(json.dumps(resp), flush=True)
-                return
+        if not model_cache_ready and cache_status == "CACHE_MISSING":
+            resp = {
+                "request_id": req_id,
+                "success": False,
+                "actual_parser_id": parser_id,
+                "actual_parser_version": "3.0.0",
+                "runtime_versions": runtime_versions,
+                "error_type": "PARSER_UNAVAILABLE",
+                "error_message": "PaddleOCR required model artifacts (.pdiparams) not found in cache and ALLOW_MODEL_DOWNLOAD is not set.",
+            }
+            print(json.dumps(resp), flush=True)
+            return
 
-        # Attempt importing official PaddleOCRVL
-        from paddleocr import PaddleOCRVL
+        # Instantiate pipeline using factory function
+        pipeline = create_paddleocr_vl_pipeline(options)
 
-        pipeline = PaddleOCRVL(
-            pipeline_version=options.get("pipeline_version", "v1.6"),
-            device=options.get("device", "cpu"),
-            engine=options.get("engine", "paddle"),
-            use_doc_orientation_classify=options.get(
-                "use_doc_orientation_classify", False
-            ),
-            use_doc_unwarping=options.get("use_doc_unwarping", False),
-            use_layout_detection=options.get("use_layout_detection", True),
-            use_chart_recognition=options.get("use_chart_recognition", False),
-            use_seal_recognition=options.get("use_seal_recognition", False),
-            use_ocr_for_image_block=options.get("use_ocr_for_image_block", False),
-        )
+        raw_output = pipeline.predict(input=str(input_path))
+        results = list(raw_output) if raw_output is not None else []
 
-        results = pipeline.predict(input=str(input_path))
+        if not results:
+            resp = {
+                "request_id": req_id,
+                "success": False,
+                "actual_parser_id": parser_id,
+                "actual_parser_version": runtime_versions.get("paddleocr", "3.0.0"),
+                "runtime_versions": runtime_versions,
+                "error_type": "PARSER_EMPTY_OUTPUT",
+                "error_message": "PaddleOCR-VL predict returned empty output.",
+            }
+            print(json.dumps(resp), flush=True)
+            return
 
         pages = []
-        if isinstance(results, list):
-            for p_idx, res_item in enumerate(results):
-                page_ir_dict = build_page_ir_from_paddle(
-                    res_item, p_idx + 1, doc_id
-                )
-                pages.append(page_ir_dict)
+        for p_idx, res_item in enumerate(results):
+            page_ir_dict = build_page_ir_from_paddle(res_item, p_idx + 1, doc_id)
+            pages.append(page_ir_dict)
 
         elapsed = time.time() - start_time
         doc_ir_dict = {
@@ -244,7 +318,7 @@ def main():
                 "document_id": doc_id,
                 "path": input_path,
                 "file_name": Path(input_path).name,
-                "page_count": len(pages) or 1,
+                "page_count": len(pages),
             },
             "provenance": {
                 "parser_id": parser_id,

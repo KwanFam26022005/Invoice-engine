@@ -12,7 +12,7 @@ from document_engine.ir.models import (
 )
 from document_engine.parsers.base import DocumentParser, ParserHealth, ParserSpec
 from document_engine.parsers.docling_native import dict_to_document_ir
-from document_engine.runtime import WorkerClient, WorkerRequest, resolve_worker_python
+from document_engine.runtime import WorkerClient, WorkerRequest
 
 
 class PaddleOCRVLParser(DocumentParser):
@@ -48,40 +48,34 @@ class PaddleOCRVLParser(DocumentParser):
         return self._spec
 
     def healthcheck(self) -> ParserHealth:
-        import importlib.util
-
-        has_paddle_in_base = (
-            importlib.util.find_spec("paddle") is not None
-            and importlib.util.find_spec("paddleocr") is not None
-        )
-        python_bin = resolve_worker_python(self.parser_id)
-        is_isolated = python_bin != Path(python_bin).name
-
-        if has_paddle_in_base or is_isolated:
-            # Check offline model policy
-            allow_dl = os.getenv("ALLOW_MODEL_DOWNLOAD") == "1"
-            user_home = Path.home()
-            paddle_dir = user_home / ".paddleocr"
-            has_params = paddle_dir.exists() and any(paddle_dir.rglob("*.pdiparams"))
-            if not has_params and not allow_dl:
+        try:
+            req = WorkerRequest(
+                request_id="req_healthcheck_paddleocr_vl",
+                parser_id=self.parser_id,
+                operation="healthcheck",
+                allow_model_download=os.getenv("ALLOW_MODEL_DOWNLOAD") == "1",
+            )
+            resp = self.worker_client.execute_worker(req)
+            if resp.success and resp.health_data:
                 return ParserHealth(
                     parser_id=self.parser_id,
-                    healthy=False,
-                    message="PaddleOCR-VL model artifacts missing in cache and ALLOW_MODEL_DOWNLOAD is not set",
+                    healthy=True,
+                    message=f"PaddleOCR-VL worker ready ({resp.health_data.get('python_executable')})",
                     dependencies_available=True,
                 )
             return ParserHealth(
                 parser_id=self.parser_id,
-                healthy=True,
-                message="PaddleOCR-VL fallback pipeline available",
+                healthy=False,
+                message=resp.error_message or "PaddleOCR-VL worker healthcheck failed",
+                dependencies_available=bool(resp.health_data and resp.health_data.get("paddle_installed")),
             )
-
-        return ParserHealth(
-            parser_id=self.parser_id,
-            healthy=False,
-            message="PaddleOCR-VL fallback dependencies not installed",
-            dependencies_available=False,
-        )
+        except Exception as e:
+            return ParserHealth(
+                parser_id=self.parser_id,
+                healthy=False,
+                message=f"PaddleOCR-VL worker unavailable: {e}",
+                dependencies_available=False,
+            )
 
     def supports(self, profile: DocumentProfile) -> bool:
         return profile.pdf_profile != PDFProfileType.INVALID_PDF
@@ -104,6 +98,7 @@ class PaddleOCRVLParser(DocumentParser):
             request = WorkerRequest(
                 request_id=f"req_{document.document_id}_paddleocr_vl",
                 parser_id=self.parser_id,
+                operation="parse",
                 input_path=str(pdf_path),
                 document_id=document.document_id,
                 page_count=document.page_count,
