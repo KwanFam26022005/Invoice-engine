@@ -38,18 +38,18 @@ class DoclingNativeParser(DocumentParser):
         return self._spec
 
     def healthcheck(self) -> ParserHealth:
-        try:
-            import docling  # noqa: F401
+        import importlib.util
+
+        if importlib.util.find_spec("docling") is not None:
             return ParserHealth(
                 parser_id=self.parser_id, healthy=True, message="Docling available"
             )
-        except ImportError:
-            return ParserHealth(
-                parser_id=self.parser_id,
-                healthy=False,
-                message="Docling package not installed",
-                dependencies_available=False,
-            )
+        return ParserHealth(
+            parser_id=self.parser_id,
+            healthy=False,
+            message="Docling package not installed",
+            dependencies_available=False,
+        )
 
     def supports(self, profile: DocumentProfile) -> bool:
         return profile.pdf_profile in (PDFProfileType.NATIVE_PDF, PDFProfileType.MIXED_PDF)

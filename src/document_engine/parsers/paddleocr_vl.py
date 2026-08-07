@@ -42,19 +42,20 @@ class PaddleOCRVLParser(DocumentParser):
         return self._spec
 
     def healthcheck(self) -> ParserHealth:
-        try:
-            import paddle  # noqa: F401
-            import paddleocr  # noqa: F401
+        import importlib.util
+
+        has_paddle = importlib.util.find_spec("paddle") is not None
+        has_paddleocr = importlib.util.find_spec("paddleocr") is not None
+        if has_paddle and has_paddleocr:
             return ParserHealth(
                 parser_id=self.parser_id, healthy=True, message="PaddleOCR 3.x environment available"
             )
-        except ImportError as e:
-            return ParserHealth(
-                parser_id=self.parser_id,
-                healthy=False,
-                message=f"PaddleOCR fallback dependencies not installed: {e}",
-                dependencies_available=False,
-            )
+        return ParserHealth(
+            parser_id=self.parser_id,
+            healthy=False,
+            message="PaddleOCR fallback dependencies not installed",
+            dependencies_available=False,
+        )
 
     def supports(self, profile: DocumentProfile) -> bool:
         return profile.pdf_profile != PDFProfileType.INVALID_PDF
