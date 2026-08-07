@@ -3,8 +3,8 @@
 from decimal import Decimal
 from typing import Dict, List, Tuple
 
-from document_engine.extraction.evidence import find_text_evidence
-from document_engine.extraction.normalizer import parse_decimal
+from document_engine.extraction.evidence import find_text_evidence, resolve_semantic_columns
+from document_engine.extraction.normalizer import parse_date, parse_decimal
 from document_engine.ir.models import DocumentIR
 from document_engine.schemas.family_schemas import (
     CommonDocumentFields,
@@ -20,6 +20,14 @@ class UtilityConsumptionMapper:
         self, document_ir: DocumentIR
     ) -> Tuple[UtilityConsumptionInvoicePayload, Dict[str, FieldCandidate]]:
         field_candidates: Dict[str, FieldCandidate] = {}
+
+        doc_num, doc_ev = find_text_evidence(document_ir, r"(?:số hóa đơn|so hoa don|invoice no|số|so)\s*:\s*([A-Za-z0-9/\-]+)")
+        date_raw, date_ev = find_text_evidence(document_ir, r"(?:ngày|ngay|date)\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{4}|\d{1,2}\s*tháng\s*\d{1,2}\s*năm\s*\d{4})")
+        issue_date = parse_date(date_raw)[0] if date_raw else None
+        if doc_num:
+            field_candidates["common.document_number"] = FieldCandidate(value=doc_num, raw_value=doc_num, evidence_references=doc_ev)
+        if issue_date:
+            field_candidates["common.issue_date"] = FieldCandidate(value=issue_date, raw_value=date_raw, evidence_references=date_ev)
 
         # 1. Billing Period
         period_raw, period_ev = find_text_evidence(
@@ -82,6 +90,7 @@ class UtilityConsumptionMapper:
         for page in document_ir.pages:
             for table in page.tables:
                 if table.row_count > 1:
+                    header_columns = resolve_semantic_columns(table)
                     rows_dict: Dict[int, Dict[int, str]] = {}
                     for c in table.cells:
                         rows_dict.setdefault(c.row_index, {})[c.col_index] = c.text
@@ -94,10 +103,18 @@ class UtilityConsumptionMapper:
                         if not any(texts):
                             continue
 
-                        name = texts[0] if len(texts) > 0 else f"Tier {r_idx}"
-                        qty = parse_decimal(texts[1])[0] if len(texts) > 1 else None
-                        price = parse_decimal(texts[2])[0] if len(texts) > 2 else None
-                        amt = parse_decimal(texts[3])[0] if len(texts) > 3 else None
+                        if header_columns and {"description", "quantity", "unit_price", "amount"}.issubset(header_columns):
+                            name = r_data.get(header_columns["description"], f"Tier {r_idx}")
+                            qty = parse_decimal(r_data.get(header_columns["quantity"]))[0]
+                            price = parse_decimal(r_data.get(header_columns["unit_price"]))[0]
+                            amt = parse_decimal(r_data.get(header_columns["amount"]))[0]
+                        elif not header_columns and table.col_count == 4:
+                            name = texts[0] if len(texts) > 0 else f"Tier {r_idx}"
+                            qty = parse_decimal(texts[1])[0] if len(texts) > 1 else None
+                            price = parse_decimal(texts[2])[0] if len(texts) > 2 else None
+                            amt = parse_decimal(texts[3])[0] if len(texts) > 3 else None
+                        else:
+                            continue
 
                         pricing_tiers.append(
                             PricingTier(
@@ -120,6 +137,8 @@ class UtilityConsumptionMapper:
             )
 
         common = CommonDocumentFields(
+            document_number=doc_num,
+            issue_date=issue_date,
             billing_period=period_raw,
             currency="VND",
             grand_total=grand_total,

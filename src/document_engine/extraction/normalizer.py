@@ -127,9 +127,12 @@ def parse_date(raw_date: Optional[str]) -> Tuple[Optional[str], str, List[str]]:
         if 1 <= day <= 31 and 1 <= month <= 12:
             return f"{year:04d}-{month:02d}-{day:02d}", "valid", []
 
-    # Vietnamese natural language date: Ngày DD tháng MM năm YYYY
+    # Vietnamese natural language date, including bilingual form labels.
     m3 = re.search(
-        r"ngày\s*(\d{1,2})\s*tháng\s*(\d{1,2})\s*năm\s*(\d{4})", clean, re.IGNORECASE
+        r"(?:ngày\s*(?:\(date\)\s*)?)?(\d{1,2})\s*tháng\s*"
+        r"(?:\(month\)\s*)?(\d{1,2})\s*năm\s*(?:\(year\)\s*)?(\d{4})",
+        clean,
+        re.IGNORECASE,
     )
     if m3:
         day, month, year = int(m3.group(1)), int(m3.group(2)), int(m3.group(3))

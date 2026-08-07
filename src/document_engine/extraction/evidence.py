@@ -1,9 +1,26 @@
 """Evidence collection utilities for tracing extracted values back to DocumentIR blocks and cells."""
 
 import re
+import unicodedata
 from typing import List, Optional, Tuple
 
 from document_engine.ir.models import DocumentIR, EvidenceReference, TableCellIR, TableIR
+
+
+def resolve_semantic_columns(table: TableIR) -> dict[str, int]:
+    """Map common invoice headers to semantic columns without positional shifts."""
+    headers = {cell.col_index: unicodedata.normalize("NFD", cell.text).lower() for cell in table.cells if cell.row_index == 0}
+    mapping: dict[str, int] = {}
+    aliases = {"description": ("mat hang", "ten hang", "hang hoa", "dich vu", "description", "item"), "unit": ("dvt", "don vi tinh", "unit"), "quantity": ("so luong", "quantity"), "unit_price": ("don gia", "unit price"), "amount": ("thanh tien", "amount")}
+    for concept, patterns in aliases.items():
+        for index, header in headers.items():
+            normalized = "".join(
+                char for char in header if not unicodedata.combining(char)
+            ).replace("đ", "d")
+            if any(pattern in normalized for pattern in patterns):
+                mapping[concept] = index
+                break
+    return mapping
 
 
 def find_text_evidence(
@@ -38,18 +55,19 @@ def find_anchor_value(
     """Extract a same- or next-block value after a semantic anchor with evidence."""
     anchor = re.compile(anchor_pattern, re.IGNORECASE)
     value = re.compile(value_pattern)
-    blocks = [block for page in document_ir.pages for block in page.blocks if block.text.strip()]
-    for index, block in enumerate(blocks):
-        match = anchor.search(block.text)
-        if not match:
-            continue
-        candidates = [block.text[match.end():], *(item.text for item in blocks[index + 1 : index + 3])]
-        for candidate in candidates:
-            found = value.search(candidate.lstrip(" :\t\n"))
-            if found:
-                raw = found.group(0).strip()
-                if raw:
-                    return raw, [EvidenceReference(document_id=document_ir.document_id, page_number=block.page_number, block_id=block.block_id, bbox=block.geometry.bbox if block.geometry else None, source_text=raw, parser_id=document_ir.provenance.parser_id, parser_version=document_ir.provenance.parser_version)]
+    for page in document_ir.pages:
+        blocks = [block for block in page.blocks if block.text.strip()]
+        for index, block in enumerate(blocks):
+            match = anchor.search(block.text)
+            if not match:
+                continue
+            candidates = [(block, block.text[match.end():]), *[(item, item.text) for item in blocks[index + 1 : index + 3]]]
+            for value_block, candidate in candidates:
+                found = value.search(candidate.lstrip(" :\t\n"))
+                if found:
+                    raw = found.group(0).strip()
+                    if raw:
+                        return raw, [EvidenceReference(document_id=document_ir.document_id, page_number=value_block.page_number, block_id=value_block.block_id, bbox=value_block.geometry.bbox if value_block.geometry else None, source_text=raw, parser_id=document_ir.provenance.parser_id, parser_version=document_ir.provenance.parser_version)]
     return None, []
 
 
