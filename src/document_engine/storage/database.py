@@ -2,8 +2,11 @@
 
 import json
 from pathlib import Path
+from typing import Optional
 import duckdb
 
+from document_engine.extraction.candidate import FamilyCompletenessReport
+from document_engine.routing.parser_router import RoutingDecision
 from document_engine.schemas.family_schemas import BusinessDocumentEnvelope
 from document_engine.validation.validator import ValidationResult
 
@@ -56,11 +59,13 @@ class DuckDBStorage:
                 attempt_id VARCHAR PRIMARY KEY,
                 document_id VARCHAR REFERENCES documents(document_id),
                 run_id VARCHAR,
-                parser_id VARCHAR,
+                requested_parser VARCHAR,
+                actual_parser VARCHAR,
                 attempt_number INTEGER,
                 success BOOLEAN,
                 execution_time_seconds DOUBLE,
-                error_message VARCHAR
+                error_message VARCHAR,
+                quality_report_json VARCHAR
             );
 
             CREATE TABLE IF NOT EXISTS document_ir (
@@ -78,13 +83,15 @@ class DuckDBStorage:
                 currency VARCHAR,
                 grand_total DOUBLE,
                 canonical_payload_json VARCHAR,
+                field_candidates_json VARCHAR,
+                completeness_score DOUBLE,
                 created_at TIMESTAMP
             );
 
             CREATE TABLE IF NOT EXISTS parties (
                 party_id VARCHAR PRIMARY KEY,
                 document_id VARCHAR REFERENCES documents(document_id),
-                role VARCHAR, -- seller, buyer, payer, payee, organization, recipient
+                role VARCHAR,
                 name VARCHAR,
                 tax_id VARCHAR,
                 address VARCHAR,
@@ -171,12 +178,21 @@ class DuckDBStorage:
         self,
         envelope: BusinessDocumentEnvelope,
         validation: ValidationResult,
+        routing_decision: Optional[RoutingDecision] = None,
+        completeness: Optional[FamilyCompletenessReport] = None,
         run_id: str = "default_run",
     ) -> None:
         """Store document results inside an isolated transaction."""
         doc_id = envelope.document_id
         payload_dict = envelope.payload.model_dump(mode="json")
         payload_json = json.dumps(payload_dict, ensure_ascii=False)
+
+        candidates_dict = {
+            k: v.model_dump(mode="json") for k, v in envelope.field_candidates.items()
+        }
+        candidates_json = json.dumps(candidates_dict, ensure_ascii=False)
+
+        comp_score = completeness.completeness_score if completeness else 1.0
 
         with self.get_connection() as conn:
             conn.execute("BEGIN TRANSACTION;")
@@ -195,7 +211,7 @@ class DuckDBStorage:
                         "application/pdf",
                         doc_id.replace("doc_", ""),
                         1,
-                        "validated" if validation.is_valid else "review_required",
+                        "validated" if validation.is_valid and not validation.requires_review else "review_required",
                     ],
                 )
 
@@ -203,16 +219,22 @@ class DuckDBStorage:
                 common = getattr(envelope.payload, "common", None)
                 doc_num = common.document_number if common else None
                 issue_date = common.issue_date if common else None
-                grand_total = float(common.grand_total) if (common and common.grand_total is not None) else 0.0
+                grand_total = (
+                    float(common.grand_total)
+                    if (common and common.grand_total is not None)
+                    else 0.0
+                )
 
                 conn.execute(
                     """
-                    INSERT INTO business_documents (document_id, document_family, source_format, document_number, issue_date, currency, grand_total, canonical_payload_json, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    INSERT INTO business_documents (document_id, document_family, source_format, document_number, issue_date, currency, grand_total, canonical_payload_json, field_candidates_json, completeness_score, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                     ON CONFLICT(document_id) DO UPDATE SET
                         document_number=excluded.document_number,
                         grand_total=excluded.grand_total,
-                        canonical_payload_json=excluded.canonical_payload_json;
+                        canonical_payload_json=excluded.canonical_payload_json,
+                        field_candidates_json=excluded.field_candidates_json,
+                        completeness_score=excluded.completeness_score;
                     """,
                     [
                         doc_id,
@@ -223,8 +245,37 @@ class DuckDBStorage:
                         "VND",
                         grand_total,
                         payload_json,
+                        candidates_json,
+                        comp_score,
                     ],
                 )
+
+                # Upsert parser attempt
+                if routing_decision:
+                    qual_json = (
+                        routing_decision.quality_report.model_dump_json()
+                        if routing_decision.quality_report
+                        else None
+                    )
+                    conn.execute(
+                        """
+                        INSERT INTO parser_attempts (attempt_id, document_id, run_id, requested_parser, actual_parser, attempt_number, success, execution_time_seconds, error_message, quality_report_json)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(attempt_id) DO UPDATE SET actual_parser=excluded.actual_parser;
+                        """,
+                        [
+                            f"att_{doc_id}_{routing_decision.attempt_number}",
+                            doc_id,
+                            run_id,
+                            routing_decision.requested_parser,
+                            routing_decision.actual_parser,
+                            routing_decision.attempt_number,
+                            True,
+                            0.0,
+                            None,
+                            qual_json,
+                        ],
+                    )
 
                 # Store validation issues
                 for idx, issue in enumerate(validation.issues):
@@ -246,7 +297,7 @@ class DuckDBStorage:
                     )
 
                 # Store in review queue if review required
-                if validation.requires_review:
+                if validation.requires_review or (completeness and completeness.requires_review):
                     conn.execute(
                         """
                         INSERT INTO review_queue (review_id, document_id, reason, status, created_at, updated_at)
@@ -256,7 +307,7 @@ class DuckDBStorage:
                         [
                             f"rev_{doc_id}",
                             doc_id,
-                            validation.issues[0].code if validation.issues else "review_required",
+                            validation.issues[0].code if validation.issues else "completeness_review_required",
                         ],
                     )
 

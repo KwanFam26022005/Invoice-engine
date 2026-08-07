@@ -1,0 +1,13 @@
+parser_id: docling_native
+name: Docling Native Parser
+version: 2.0.0
+description: Layout & table structure parser for native vector PDFs.
+supported_profiles:
+  - native_pdf
+  - mixed_pdf
+requires_gpu: false
+is_fallback: false
+config:
+  do_ocr: false
+  do_table_structure: true
+  export_format: markdown

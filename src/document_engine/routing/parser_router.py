@@ -1,20 +1,81 @@
 """Profile-aware Parser Router dispatches documents to optimal parsers and handles fallback policy."""
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 from document_engine.core.models import PDFProfileType
-from document_engine.ir.models import DocumentParseResult, DocumentProfile, SourceDocument
+from document_engine.ir.models import DocumentIR, DocumentParseResult, DocumentProfile, SourceDocument
 from document_engine.parsers.base import DocumentParser
 from document_engine.parsers.registry import ParserRegistry, default_registry
 
 
+class ParseQualityReport(BaseModel):
+    has_pages: bool = False
+    nonempty_page_ratio: float = 0.0
+    text_character_count: int = 0
+    block_count: int = 0
+    table_count: int = 0
+    geometry_coverage: float = 0.0
+    page_coverage: float = 0.0
+    placeholder_detected: bool = False
+    parse_warnings: List[str] = Field(default_factory=list)
+    critical_structure_missing: bool = False
+
+    @classmethod
+    def evaluate(cls, result: DocumentParseResult, profile: DocumentProfile) -> "ParseQualityReport":
+        if not result.success or not result.document_ir:
+            return cls(critical_structure_missing=True)
+
+        doc_ir: DocumentIR = result.document_ir
+        if not doc_ir.pages:
+            return cls(has_pages=False, critical_structure_missing=True)
+
+        nonempty_pages = sum(1 for p in doc_ir.pages if p.text_content and p.text_content.strip())
+        ratio = nonempty_pages / len(doc_ir.pages)
+        char_count = len(doc_ir.full_text.strip())
+        blocks_cnt = sum(len(p.blocks) for p in doc_ir.pages)
+        tables_cnt = sum(len(p.tables) for p in doc_ir.pages)
+
+        # Check geometry coverage
+        blocks_with_bbox = sum(
+            1 for p in doc_ir.pages for b in p.blocks if b.geometry is not None and b.geometry.bbox
+        )
+        geom_coverage = blocks_with_bbox / blocks_cnt if blocks_cnt > 0 else 0.0
+
+        # Check placeholders
+        placeholder_phrases = ["fallback page", "page content", "ocr page content", "placeholder", "synthetic"]
+        placeholder_found = any(
+            phrase in doc_ir.full_text.lower() for phrase in placeholder_phrases
+        )
+
+        crit_missing = False
+        if profile.pdf_profile == PDFProfileType.SCAN_PDF and char_count < 10:
+            crit_missing = True
+        if ratio < 0.5:
+            crit_missing = True
+
+        return cls(
+            has_pages=True,
+            nonempty_page_ratio=ratio,
+            text_character_count=char_count,
+            block_count=blocks_cnt,
+            table_count=tables_cnt,
+            geometry_coverage=geom_coverage,
+            page_coverage=ratio,
+            placeholder_detected=placeholder_found,
+            parse_warnings=[w.message for w in result.warnings],
+            critical_structure_missing=crit_missing,
+        )
+
+
 class RoutingDecision(BaseModel):
-    selected_parser: str
+    requested_parser: str
+    actual_parser: str
     selection_reason: str
     profile_signals: Dict[str, Any] = Field(default_factory=dict)
     fallback_trigger: Optional[str] = None
     attempt_number: int = 1
+    quality_report: Optional[ParseQualityReport] = None
 
 
 class ParserRoutingOutcome(BaseModel):
@@ -46,17 +107,65 @@ class ParserRouter:
         enable_fallback: bool = True,
         forced_parser: Optional[str] = None,
     ) -> ParserRoutingOutcome:
-        # 1. Determine primary parser ID
+        # Determine primary requested parser ID
         if forced_parser:
-            primary_parser_id = forced_parser
+            requested_parser_id = forced_parser
             reason = f"User explicitly requested parser '{forced_parser}'."
         else:
             profile_key = profile.pdf_profile.value
-            primary_parser_id = self.policy.get(profile_key, "pymupdf_native")
-            reason = f"Selected '{primary_parser_id}' based on profile '{profile_key}'."
+            requested_parser_id = self.policy.get(profile_key, "pymupdf_native")
+            reason = f"Selected '{requested_parser_id}' based on profile '{profile_key}'."
+
+        primary_parser, actual_parser_id = self._get_parser_or_none(requested_parser_id)
+
+        if primary_parser is None:
+            # Requested parser unavailable - DO NOT silent substitute
+            failed_res = DocumentParseResult(
+                success=False,
+                error_message=f"Requested parser '{requested_parser_id}' is unavailable.",
+            )
+            decision = RoutingDecision(
+                requested_parser=requested_parser_id,
+                actual_parser=requested_parser_id,
+                selection_reason=f"Requested parser '{requested_parser_id}' is unavailable.",
+                profile_signals={"pdf_profile": profile.pdf_profile.value},
+                attempt_number=1,
+            )
+
+            # Trigger fallback if enabled
+            if enable_fallback and not forced_parser:
+                fallback_parser_id = self.policy.get("fallback", "paddleocr_vl")
+                if fallback_parser_id != requested_parser_id:
+                    fb_parser, fb_actual_id = self._get_parser_or_none(fallback_parser_id)
+                    if fb_parser:
+                        fb_res = fb_parser.parse(document, profile)
+                        fb_quality = ParseQualityReport.evaluate(fb_res, profile)
+                        decision.fallback_trigger = f"Primary parser '{requested_parser_id}' was unavailable; fallback to '{fallback_parser_id}'."
+                        decision.attempt_number = 2
+                        decision.actual_parser = fb_actual_id
+                        decision.quality_report = fb_quality
+                        return ParserRoutingOutcome(
+                            primary_result=failed_res,
+                            fallback_result=fb_res,
+                            selected_result=fb_res,
+                            selection_reason=f"Primary unavailable. Selected fallback '{fallback_parser_id}'.",
+                            routing_decision=decision,
+                        )
+
+            return ParserRoutingOutcome(
+                primary_result=failed_res,
+                fallback_result=None,
+                selected_result=failed_res,
+                selection_reason=reason,
+                routing_decision=decision,
+            )
+
+        primary_result = primary_parser.parse(document, profile)
+        primary_quality = ParseQualityReport.evaluate(primary_result, profile)
 
         decision = RoutingDecision(
-            selected_parser=primary_parser_id,
+            requested_parser=requested_parser_id,
+            actual_parser=actual_parser_id,
             selection_reason=reason,
             profile_signals={
                 "pdf_profile": profile.pdf_profile.value,
@@ -64,39 +173,40 @@ class ParserRouter:
                 "text_character_count": profile.text_character_count,
             },
             attempt_number=1,
+            quality_report=primary_quality,
         )
 
-        primary_parser = self._get_available_parser(primary_parser_id)
-        primary_result = primary_parser.parse(document, profile)
-
-        # Evaluate fallback condition
-        needs_fallback = self.should_trigger_fallback(primary_result, profile)
+        needs_fallback = self.should_trigger_fallback(primary_result, primary_quality, profile)
 
         if needs_fallback and enable_fallback and not forced_parser:
             fallback_parser_id = self.policy.get("fallback", "paddleocr_vl")
-            if fallback_parser_id != primary_parser_id:
-                fallback_reason = (
-                    f"Primary parser '{primary_parser_id}' failed or had empty extraction; "
-                    f"triggering fallback '{fallback_parser_id}'."
-                )
-                fallback_parser = self._get_available_parser(fallback_parser_id)
-                fallback_result = fallback_parser.parse(document, profile)
+            if fallback_parser_id != requested_parser_id:
+                fb_parser, fb_actual_id = self._get_parser_or_none(fallback_parser_id)
+                if fb_parser:
+                    fallback_reason = (
+                        f"Primary parser '{requested_parser_id}' failed quality gate; "
+                        f"triggering fallback '{fallback_parser_id}'."
+                    )
+                    fallback_result = fb_parser.parse(document, profile)
+                    fallback_quality = ParseQualityReport.evaluate(fallback_result, profile)
 
-                # Select best result based on structural validity and completeness
-                selected_result, final_reason = self._select_best_result(
-                    primary_result, fallback_result
-                )
+                    selected_result, final_reason = self._select_best_result(
+                        primary_result, primary_quality, fallback_result, fallback_quality
+                    )
 
-                decision.fallback_trigger = fallback_reason
-                decision.attempt_number = 2
+                    decision.fallback_trigger = fallback_reason
+                    decision.attempt_number = 2
+                    if selected_result == fallback_result:
+                        decision.actual_parser = fb_actual_id
+                        decision.quality_report = fallback_quality
 
-                return ParserRoutingOutcome(
-                    primary_result=primary_result,
-                    fallback_result=fallback_result,
-                    selected_result=selected_result,
-                    selection_reason=final_reason,
-                    routing_decision=decision,
-                )
+                    return ParserRoutingOutcome(
+                        primary_result=primary_result,
+                        fallback_result=fallback_result,
+                        selected_result=selected_result,
+                        selection_reason=final_reason,
+                        routing_decision=decision,
+                    )
 
         return ParserRoutingOutcome(
             primary_result=primary_result,
@@ -107,43 +217,54 @@ class ParserRouter:
         )
 
     def should_trigger_fallback(
-        self, result: DocumentParseResult, profile: DocumentProfile
+        self,
+        result: DocumentParseResult,
+        quality: ParseQualityReport,
+        profile: DocumentProfile,
     ) -> bool:
-        if not result.success or result.document_ir is None:
+        if not result.success or quality.critical_structure_missing:
             return True
-
-        doc_ir = result.document_ir
-        if not doc_ir.full_text or not doc_ir.full_text.strip():
+        if quality.placeholder_detected:
             return True
+        return quality.nonempty_page_ratio < 0.5
 
-        return (
-            profile.pdf_profile == PDFProfileType.SCAN_PDF
-            and not profile.has_text_layer
-            and len(doc_ir.full_text.strip()) < 10
-        )
-
-    def _get_available_parser(self, parser_id: str) -> DocumentParser:
+    def _get_parser_or_none(self, parser_id: str) -> tuple[Optional[DocumentParser], str]:
+        """Fetch parser without silent substitution."""
         try:
             parser = self.registry.get_parser(parser_id)
             health = parser.healthcheck()
             if health.healthy:
-                return parser
+                return parser, parser_id
         except Exception:
             pass
-
-        # Fallback to PyMuPDF native if requested parser is unavailable
-        return self.registry.get_parser("pymupdf_native")
+        return None, parser_id
 
     def _select_best_result(
-        self, primary: DocumentParseResult, fallback: DocumentParseResult
+        self,
+        primary: DocumentParseResult,
+        primary_quality: ParseQualityReport,
+        fallback: DocumentParseResult,
+        fallback_quality: ParseQualityReport,
     ) -> tuple[DocumentParseResult, str]:
-        if fallback.success and fallback.document_ir and fallback.document_ir.full_text.strip():
-            if not primary.success or not primary.document_ir or not primary.document_ir.full_text.strip():
-                return fallback, "Selected fallback result because primary parser failed or produced empty text."
-            # Compare character completeness
-            p_len = len(primary.document_ir.full_text.strip())
-            f_len = len(fallback.document_ir.full_text.strip())
-            if f_len > p_len * 1.5:
-                return fallback, f"Selected fallback result due to significantly higher text completeness ({f_len} vs {p_len} chars)."
+        """Select best parse result using structural quality report."""
+        if not fallback.success:
+            return primary, "Selected primary parser because fallback failed."
 
-        return primary, "Selected primary parser result."
+        if not primary.success:
+            return fallback, "Selected fallback parser because primary parser failed."
+
+        # Compare placeholder detection
+        if primary_quality.placeholder_detected and not fallback_quality.placeholder_detected:
+            return fallback, "Selected fallback parser because primary contained placeholder content."
+
+        # Compare structural validity and critical structures
+        if primary_quality.critical_structure_missing and not fallback_quality.critical_structure_missing:
+            return fallback, "Selected fallback parser because primary was missing critical structures."
+
+        if (
+            fallback_quality.table_count > primary_quality.table_count
+            and fallback_quality.nonempty_page_ratio >= primary_quality.nonempty_page_ratio
+        ):
+            return fallback, "Selected fallback parser due to superior table layout extraction."
+
+        return primary, "Selected primary parser result based on structural quality evaluation."

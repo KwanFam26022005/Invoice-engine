@@ -1,0 +1,17 @@
+parser_id: docling_ocr
+name: Docling OCR Parser
+version: 2.0.0
+description: Layout & table structure parser for scanned/image PDFs using EasyOCR.
+supported_profiles:
+  - scan_pdf
+  - mixed_pdf
+  - native_pdf
+requires_gpu: false
+is_fallback: false
+config:
+  do_ocr: true
+  ocr_engine: easyocr
+  ocr_languages:
+    - vi
+    - en
+  do_table_structure: true

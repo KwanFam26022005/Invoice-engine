@@ -2,7 +2,7 @@
 
 import time
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 import fitz
 
 from document_engine.core.models import PDFProfileType
@@ -23,7 +23,7 @@ from document_engine.parsers.base import DocumentParser, ParserHealth, ParserSpe
 
 
 class PyMuPDFNativeParser(DocumentParser):
-    def __init__(self):
+    def __init__(self, config: Optional[dict] = None):
         self._spec = ParserSpec(
             parser_id="pymupdf_native",
             name="PyMuPDF Native Text Parser",
@@ -31,6 +31,7 @@ class PyMuPDFNativeParser(DocumentParser):
             supported_profiles=[PDFProfileType.NATIVE_PDF, PDFProfileType.MIXED_PDF],
             requires_gpu=False,
             is_fallback=False,
+            config=config or {},
         )
 
     @property

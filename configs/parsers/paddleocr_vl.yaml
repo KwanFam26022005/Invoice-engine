@@ -1,0 +1,26 @@
+parser_id: paddleocr_vl
+name: PaddleOCR-VL Fallback Parser
+version: 3.0.0
+description: Official PaddleOCR-VL v1.6 pipeline fallback parser for complex, irregular layout documents.
+supported_profiles:
+  - native_pdf
+  - scan_pdf
+  - mixed_pdf
+requires_gpu: false
+is_fallback: true
+config:
+  pipeline_version: v1.6
+  device: cpu
+  engine: paddle
+  use_doc_orientation_classify: false
+  use_doc_unwarping: false
+  use_layout_detection: true
+  use_chart_recognition: false
+  use_seal_recognition: false
+  use_ocr_for_image_block: false
+
+  # Optional local-only model directories.
+  # Do not commit personal absolute paths.
+  # Override at runtime via PADDLE_LAYOUT_MODEL_DIR and PADDLE_VL_REC_MODEL_DIR.
+  layout_detection_model_dir: null
+  vl_rec_model_dir: null

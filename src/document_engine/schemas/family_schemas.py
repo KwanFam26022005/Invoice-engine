@@ -12,7 +12,7 @@ class FieldCandidate(BaseModel):
     value: Optional[Any] = None
     raw_value: Optional[str] = None
     normalized_value: Optional[str] = None
-    confidence: float = 1.0
+    confidence: Optional[float] = 1.0
     evidence_references: List[EvidenceReference] = Field(default_factory=list)
     extraction_method: str = "native_text"  # native_text, ocr_text, table_cell, anchor_rule, computed, human_corrected
     warnings: List[str] = Field(default_factory=list)
@@ -37,58 +37,58 @@ class LineItem(BaseModel):
     discount: Optional[Decimal] = None
     tax_rate: Optional[Decimal] = None
     tax_amount: Optional[Decimal] = None
-    amount: Decimal = Field(default_factory=lambda: Decimal("0.00"))
+    amount: Optional[Decimal] = None
     evidence: List[EvidenceReference] = Field(default_factory=list)
 
 
 class TaxBreakdown(BaseModel):
-    tax_rate: Decimal
-    taxable_amount: Decimal
-    tax_amount: Decimal
+    tax_rate: Optional[Decimal] = None
+    taxable_amount: Optional[Decimal] = None
+    tax_amount: Optional[Decimal] = None
 
 
 class MeterReading(BaseModel):
-    meter_number: str = ""
+    meter_number: Optional[str] = None
     measurement_type: str = "electricity"  # electricity, water, gas
     unit: str = "kWh"
-    opening_reading: Decimal = Field(default_factory=lambda: Decimal("0.0"))
-    closing_reading: Decimal = Field(default_factory=lambda: Decimal("0.0"))
-    conversion_factor: Decimal = Field(default_factory=lambda: Decimal("1.0"))
-    consumption: Decimal = Field(default_factory=lambda: Decimal("0.0"))
+    opening_reading: Optional[Decimal] = None
+    closing_reading: Optional[Decimal] = None
+    conversion_factor: Optional[Decimal] = None
+    consumption: Optional[Decimal] = None
 
 
 class PricingTier(BaseModel):
-    tier_name: str = ""
-    quantity: Decimal = Field(default_factory=lambda: Decimal("0.0"))
+    tier_name: Optional[str] = None
+    quantity: Optional[Decimal] = None
     unit: str = "kWh"
-    unit_price: Decimal = Field(default_factory=lambda: Decimal("0.00"))
-    amount: Decimal = Field(default_factory=lambda: Decimal("0.00"))
+    unit_price: Optional[Decimal] = None
+    amount: Optional[Decimal] = None
 
 
 class ServiceRecord(BaseModel):
-    service_type: str = ""
+    service_type: Optional[str] = None
     description: str = ""
-    quantity: Decimal = Field(default_factory=lambda: Decimal("0.0"))
-    unit: str = ""
-    unit_price: Decimal = Field(default_factory=lambda: Decimal("0.00"))
-    amount: Decimal = Field(default_factory=lambda: Decimal("0.00"))
+    quantity: Optional[Decimal] = None
+    unit: Optional[str] = None
+    unit_price: Optional[Decimal] = None
+    amount: Optional[Decimal] = None
     location: Optional[str] = None
     reference_number: Optional[str] = None
 
 
 class ContainerRecord(BaseModel):
-    container_number: str = ""
-    container_size: str = "20"  # 20, 40, 45
-    container_type: str = "GP"  # GP, HC, RF, OT
-    teu: Decimal = Field(default_factory=lambda: Decimal("1.0"))
+    container_number: Optional[str] = None
+    container_size: Optional[str] = None  # 20, 40, 45
+    container_type: Optional[str] = None  # GP, HC, RF, OT
+    teu: Optional[Decimal] = None
     gross_weight: Optional[Decimal] = None
-    service_type: str = ""  # lift_on, lift_off, storage, gate_in, gate_out
-    lift_count: int = 1
-    storage_days: int = 0
+    service_type: Optional[str] = None  # lift_on, lift_off, storage, gate_in, gate_out
+    lift_count: Optional[int] = None
+    storage_days: Optional[int] = None
     gate_in_time: Optional[str] = None
     gate_out_time: Optional[str] = None
     yard_location: Optional[str] = None
-    amount: Decimal = Field(default_factory=lambda: Decimal("0.00"))
+    amount: Optional[Decimal] = None
 
 
 class CommonDocumentFields(BaseModel):
@@ -157,7 +157,7 @@ class ReceiptPayload(BaseModel):
     payee: Party = Field(default_factory=Party)
     payment_method: Optional[str] = None
     reason: Optional[str] = None
-    amount: Decimal = Field(default_factory=lambda: Decimal("0.00"))
+    amount: Optional[Decimal] = None
 
 
 # Family 6: Tax Withholding Certificate
@@ -173,11 +173,9 @@ class TaxWithholdingCertificatePayload(BaseModel):
     recipient: Party = Field(default_factory=Party)
     income_type: Optional[str] = None
     payment_period: Optional[str] = None
-    total_taxable_income: Decimal = Field(default_factory=lambda: Decimal("0.00"))
-    total_tax_calculation_income: Decimal = Field(
-        default_factory=lambda: Decimal("0.00")
-    )
-    withheld_tax: Decimal = Field(default_factory=lambda: Decimal("0.00"))
+    total_taxable_income: Optional[Decimal] = None
+    total_tax_calculation_income: Optional[Decimal] = None
+    withheld_tax: Optional[Decimal] = None
     signature_date: Optional[str] = None
     lookup_code: Optional[str] = None
 
