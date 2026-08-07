@@ -99,3 +99,6 @@ mlx_models/
 !datasets/benchmark/splits/*.txt
 !datasets/preparation_logs/summary.json
 !datasets/preparation_logs/invalid_files.csv
+
+# Local runtime workspace — may contain private documents and generated outputs
+workspace/

@@ -246,3 +246,34 @@ def test_healthcheck_receives_merged_config(tmp_path, monkeypatch):
     assert req.operation == "healthcheck"
     assert req.options["layout_detection_model_dir"] == str(layout_dir)
     assert req.options["vl_rec_model_dir"] == str(vl_rec_dir)
+
+
+def test_registry_constructor_type_error_propagates():
+    """Verify that constructor TypeError propagates from registry instead of being swallowed."""
+    from document_engine.parsers.base import DocumentParser, ParserHealth, ParserSpec
+    from document_engine.parsers.registry import ParserRegistry
+
+    class IncompatibleParser(DocumentParser):
+        def __init__(self, positional_only_arg):
+            # Does not accept config keyword argument
+            self.arg = positional_only_arg
+
+        @property
+        def spec(self) -> ParserSpec:
+            return ParserSpec(parser_id="incompatible", name="Incompatible")
+
+        def healthcheck(self) -> ParserHealth:
+            return ParserHealth(parser_id="incompatible", healthy=True)
+
+        def supports(self, profile) -> bool:
+            return True
+
+        def parse(self, document, profile):
+            pass
+
+    registry = ParserRegistry()
+    registry.register("incompatible", IncompatibleParser)
+
+    with pytest.raises(TypeError):
+        registry.get_parser("incompatible")
+

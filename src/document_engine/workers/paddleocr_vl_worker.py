@@ -30,33 +30,22 @@ _CONFIG_EXTENSIONS = frozenset({".json", ".yaml", ".yml"})
 
 
 def has_model_artifacts(path: Path) -> bool:
-    """Check if a directory contains plausible model artifacts.
+    """Check if a directory contains recognized model weight artifacts.
 
-    Requires at least one weight file OR one config/metadata file
-    of a recognized model format. Returns False if uncertain.
+    Requires at least one weight file (.pdiparams, .safetensors, .bin, .onnx).
+    Config-only or README-only directories return False.
     """
     if not path.is_dir():
         return False
 
-    has_weight = False
-    has_config = False
-
     try:
         for item in path.iterdir():
-            if item.is_file():
-                suffix = item.suffix.lower()
-                if suffix in _WEIGHT_EXTENSIONS:
-                    has_weight = True
-                elif suffix in _CONFIG_EXTENSIONS:
-                    has_config = True
-
-            if has_weight and has_config:
+            if item.is_file() and item.suffix.lower() in _WEIGHT_EXTENSIONS:
                 return True
-
-        # Accept if we have at least one known artifact type
-        return has_weight or has_config
+        return False
     except Exception:
         return False
+
 
 
 def check_model_cache_status(options: dict) -> tuple[str, bool]:

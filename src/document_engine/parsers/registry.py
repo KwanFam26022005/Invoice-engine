@@ -60,10 +60,7 @@ class ParserRegistry:
         merged = merge_parser_config(defaults, loaded, env_overrides)
 
         parser_cls = self._parsers[parser_id]
-        try:
-            return parser_cls(config=merged)
-        except TypeError:
-            return parser_cls()
+        return parser_cls(config=merged)
 
     def list_parsers(self) -> List[str]:
         return list(self._parsers.keys())

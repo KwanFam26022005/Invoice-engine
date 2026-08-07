@@ -22,6 +22,9 @@ from document_engine.routing.parser_router import ParserRouter
 
 
 class FakeNativeParser(DocumentParser):
+    def __init__(self, config=None):
+        self.config = config or {}
+
     @property
     def spec(self) -> ParserSpec:
         return ParserSpec(
@@ -69,6 +72,9 @@ class FakeNativeParser(DocumentParser):
 
 
 class FakeFallbackParser(DocumentParser):
+    def __init__(self, config=None):
+        self.config = config or {}
+
     @property
     def spec(self) -> ParserSpec:
         return ParserSpec(

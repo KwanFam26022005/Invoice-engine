@@ -249,6 +249,16 @@ def test_has_model_artifacts_readme_only(tmp_path):
     assert has_model_artifacts(dir_with_readme) is False
 
 
+def test_has_model_artifacts_config_only_is_false(tmp_path):
+    """Directory with only config/metadata JSON has no weight artifacts and returns False."""
+    config_dir = tmp_path / "config_only"
+    config_dir.mkdir()
+    (config_dir / "config.json").write_text("{}", encoding="utf-8")
+    (config_dir / "inference.yml").write_text("mode: test", encoding="utf-8")
+    assert has_model_artifacts(config_dir) is False
+
+
+
 def test_has_model_artifacts_with_weight_file(tmp_path):
     """Directory with a .pdiparams weight file is recognized."""
     model_dir = tmp_path / "with_weight"
