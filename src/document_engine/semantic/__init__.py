@@ -1,4 +1,4 @@
-"""Schema-conditioned semantic extraction contracts."""
+"""Schema-conditioned semantic extraction and evidence-grounding contracts."""
 
 from document_engine.semantic.contracts import (
     SemanticCandidate,
@@ -9,8 +9,19 @@ from document_engine.semantic.contracts import (
     SemanticExtractionResult,
     SemanticExtractor,
 )
+from document_engine.semantic.grounding import (
+    EvidenceGrounder,
+    GroundedSemanticCandidate,
+    GroundingMethod,
+    GroundingStatus,
+    SemanticGroundingReport,
+)
 
 __all__ = [
+    "EvidenceGrounder",
+    "GroundedSemanticCandidate",
+    "GroundingMethod",
+    "GroundingStatus",
     "SemanticCandidate",
     "SemanticCandidateStatus",
     "SemanticEvidenceHint",
@@ -18,4 +29,5 @@ __all__ = [
     "SemanticExtractionRequest",
     "SemanticExtractionResult",
     "SemanticExtractor",
+    "SemanticGroundingReport",
 ]
