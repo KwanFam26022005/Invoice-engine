@@ -1,7 +1,7 @@
 """Extraction mapper converts DocumentIR into canonical BusinessDocumentEnvelope using specialized family mappers."""
 
 from datetime import datetime, timezone
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from document_engine.classification.classifier import ClassificationResult
 from document_engine.core.models import DocumentFamilyType, SourceFormatType
@@ -54,11 +54,11 @@ class DocumentMapper:
         )
 
     def evaluate_completeness(
-        self, envelope: BusinessDocumentEnvelope, document_ir: DocumentIR
+        self, envelope: BusinessDocumentEnvelope, document_ir: Optional[DocumentIR] = None
     ) -> FamilyCompletenessReport:
         family = envelope.document_family
         field_candidates = envelope.field_candidates
-        full_text = document_ir.full_text
+        full_text = document_ir.full_text if document_ir else ""
 
         if family == DocumentFamilyType.SALES_INVOICE:
             reqs = ["document_number", "issue_date", "grand_total"]

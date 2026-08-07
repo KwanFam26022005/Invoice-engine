@@ -74,6 +74,8 @@ class RoutingDecision(BaseModel):
     selection_reason: str
     profile_signals: Dict[str, Any] = Field(default_factory=dict)
     fallback_trigger: Optional[str] = None
+    fallback_requested_parser: Optional[str] = None
+    fallback_actual_parser: Optional[str] = None
     attempt_number: int = 1
     quality_report: Optional[ParseQualityReport] = None
 
@@ -141,6 +143,8 @@ class ParserRouter:
                         fb_res = fb_parser.parse(document, profile)
                         fb_quality = ParseQualityReport.evaluate(fb_res, profile)
                         decision.fallback_trigger = f"Primary parser '{requested_parser_id}' was unavailable; fallback to '{fallback_parser_id}'."
+                        decision.fallback_requested_parser = fallback_parser_id
+                        decision.fallback_actual_parser = fb_actual_id
                         decision.attempt_number = 2
                         decision.actual_parser = fb_actual_id
                         decision.quality_report = fb_quality
@@ -195,6 +199,8 @@ class ParserRouter:
                     )
 
                     decision.fallback_trigger = fallback_reason
+                    decision.fallback_requested_parser = fallback_parser_id
+                    decision.fallback_actual_parser = fb_actual_id
                     decision.attempt_number = 2
                     if selected_result == fallback_result:
                         decision.actual_parser = fb_actual_id

@@ -1,13 +1,14 @@
-"""DuckDB storage engine with idempotent schema migrations and isolated document transactions."""
+"""DuckDB storage engine with idempotent schema migrations, canonical versioning, and isolated document transactions."""
 
-import json
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 import duckdb
 
 from document_engine.extraction.candidate import FamilyCompletenessReport
-from document_engine.routing.parser_router import RoutingDecision
+from document_engine.ir.models import SourceDocument
+from document_engine.routing.parser_router import ParserRoutingOutcome, RoutingDecision
 from document_engine.schemas.family_schemas import BusinessDocumentEnvelope
+from document_engine.storage.projector import RelationalProjector
 from document_engine.validation.validator import ValidationResult
 
 
@@ -15,6 +16,7 @@ class DuckDBStorage:
     def __init__(self, db_path: Path):
         self.db_path = Path(db_path).resolve()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.projector = RelationalProjector()
         self.init_schema()
 
     def get_connection(self) -> duckdb.DuckDBPyConnection:
@@ -52,6 +54,9 @@ class DuckDBStorage:
                 completed_at TIMESTAMP,
                 total_documents INTEGER,
                 processed_count INTEGER,
+                accepted_count INTEGER DEFAULT 0,
+                review_required_count INTEGER DEFAULT 0,
+                failed_count INTEGER DEFAULT 0,
                 status VARCHAR
             );
 
@@ -62,10 +67,15 @@ class DuckDBStorage:
                 requested_parser VARCHAR,
                 actual_parser VARCHAR,
                 attempt_number INTEGER,
+                fallback_type VARCHAR,
                 success BOOLEAN,
+                started_at TIMESTAMP,
+                completed_at TIMESTAMP,
                 execution_time_seconds DOUBLE,
+                error_type VARCHAR,
                 error_message VARCHAR,
-                quality_report_json VARCHAR
+                quality_report_json VARCHAR,
+                selected BOOLEAN DEFAULT TRUE
             );
 
             CREATE TABLE IF NOT EXISTS document_ir (
@@ -86,6 +96,17 @@ class DuckDBStorage:
                 field_candidates_json VARCHAR,
                 completeness_score DOUBLE,
                 created_at TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS canonical_versions (
+                version_id VARCHAR PRIMARY KEY,
+                document_id VARCHAR REFERENCES documents(document_id),
+                version_number INTEGER,
+                source VARCHAR,
+                canonical_payload_json VARCHAR,
+                created_at TIMESTAMP,
+                reviewer VARCHAR,
+                parent_version_id VARCHAR
             );
 
             CREATE TABLE IF NOT EXISTS parties (
@@ -158,10 +179,13 @@ class DuckDBStorage:
             CREATE TABLE IF NOT EXISTS review_corrections (
                 correction_id VARCHAR PRIMARY KEY,
                 document_id VARCHAR REFERENCES documents(document_id),
+                canonical_version_before VARCHAR,
+                canonical_version_after VARCHAR,
                 field_path VARCHAR,
                 old_value VARCHAR,
                 new_value VARCHAR,
                 reviewer VARCHAR,
+                reason VARCHAR,
                 created_at TIMESTAMP
             );
 
@@ -174,84 +198,172 @@ class DuckDBStorage:
             );
             """)
 
+            # Add missing columns safely if migrating existing database
+            for col_sql in [
+                "ALTER TABLE parser_attempts ADD COLUMN IF NOT EXISTS fallback_type VARCHAR;",
+                "ALTER TABLE parser_attempts ADD COLUMN IF NOT EXISTS started_at TIMESTAMP;",
+                "ALTER TABLE parser_attempts ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP;",
+                "ALTER TABLE parser_attempts ADD COLUMN IF NOT EXISTS error_type VARCHAR;",
+                "ALTER TABLE parser_attempts ADD COLUMN IF NOT EXISTS selected BOOLEAN DEFAULT TRUE;",
+                "ALTER TABLE processing_runs ADD COLUMN IF NOT EXISTS accepted_count INTEGER DEFAULT 0;",
+                "ALTER TABLE processing_runs ADD COLUMN IF NOT EXISTS review_required_count INTEGER DEFAULT 0;",
+                "ALTER TABLE processing_runs ADD COLUMN IF NOT EXISTS failed_count INTEGER DEFAULT 0;",
+                "ALTER TABLE review_corrections ADD COLUMN IF NOT EXISTS canonical_version_before VARCHAR;",
+                "ALTER TABLE review_corrections ADD COLUMN IF NOT EXISTS canonical_version_after VARCHAR;",
+                "ALTER TABLE review_corrections ADD COLUMN IF NOT EXISTS reason VARCHAR;",
+            ]:
+                try:
+                    conn.execute(col_sql)
+                except Exception:
+                    pass
+
+    def start_processing_run(self, run_id: str, total_documents: int) -> None:
+        """Register a new processing batch run."""
+        with self.get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO processing_runs (run_id, started_at, total_documents, processed_count, accepted_count, review_required_count, failed_count, status)
+                VALUES (?, CURRENT_TIMESTAMP, ?, 0, 0, 0, 0, 'running')
+                ON CONFLICT(run_id) DO UPDATE SET total_documents=excluded.total_documents, status='running';
+                """,
+                [run_id, total_documents],
+            )
+
+    def update_processing_run(
+        self,
+        run_id: str,
+        processed_count: int,
+        accepted_count: int,
+        review_required_count: int,
+        failed_count: int,
+        status: str = "completed",
+    ) -> None:
+        """Update batch processing run state without setting completed_at when status is running."""
+        with self.get_connection() as conn:
+            conn.execute(
+                """
+                UPDATE processing_runs
+                SET processed_count = ?,
+                    accepted_count = ?,
+                    review_required_count = ?,
+                    failed_count = ?,
+                    completed_at = CASE WHEN ? IN ('completed', 'failed') THEN CURRENT_TIMESTAMP ELSE completed_at END,
+                    status = ?
+                WHERE run_id = ?;
+                """,
+                [processed_count, accepted_count, review_required_count, failed_count, status, status, run_id],
+            )
+
+    def store_failed_document(
+        self,
+        source_doc: SourceDocument,
+        profile: Optional[Any] = None,
+        routing_outcome: Optional[ParserRoutingOutcome] = None,
+        run_id: str = "default_run",
+    ) -> None:
+        """Store document record, document profile, and parser attempts for failed parse attempts without requiring envelope."""
+        doc_id = source_doc.document_id
+        filename = source_doc.filename
+        rel_path = str(source_doc.path)
+        sha256 = source_doc.sha256
+        page_count = source_doc.page_count
+
+        with self.get_connection() as conn:
+            conn.execute("BEGIN TRANSACTION;")
+            try:
+                # 1. Documents table
+                conn.execute(
+                    """
+                    INSERT INTO documents (document_id, filename, path, mime_type, sha256, page_count, received_at, status)
+                    VALUES (?, ?, ?, 'application/pdf', ?, ?, CURRENT_TIMESTAMP, 'failed')
+                    ON CONFLICT(document_id) DO UPDATE SET status='failed', page_count=excluded.page_count;
+                    """,
+                    [doc_id, filename, rel_path, sha256, page_count],
+                )
+
+                # 2. Document Profile table if profile present
+                if profile:
+                    conn.execute(
+                        """
+                        INSERT INTO document_profiles (document_id, pdf_profile, has_text_layer, text_character_count, text_density, image_count, full_page_image_ratio, requires_ocr)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(document_id) DO UPDATE SET pdf_profile=excluded.pdf_profile;
+                        """,
+                        [
+                            doc_id,
+                            profile.pdf_profile.value,
+                            profile.has_text_layer,
+                            profile.text_character_count,
+                            profile.text_density,
+                            profile.image_count,
+                            profile.full_page_image_ratio,
+                            profile.requires_ocr,
+                        ],
+                    )
+
+                # 3. Parser attempts
+                if routing_outcome:
+                    self._store_parser_attempts(conn, doc_id, run_id, routing_outcome)
+
+                conn.execute("COMMIT;")
+            except Exception:
+                conn.execute("ROLLBACK;")
+                raise
+
     def store_document(
         self,
         envelope: BusinessDocumentEnvelope,
         validation: ValidationResult,
         routing_decision: Optional[RoutingDecision] = None,
+        routing_outcome: Optional[ParserRoutingOutcome] = None,
         completeness: Optional[FamilyCompletenessReport] = None,
+        source_doc: Optional[SourceDocument] = None,
         run_id: str = "default_run",
     ) -> None:
         """Store document results inside an isolated transaction."""
         doc_id = envelope.document_id
-        payload_dict = envelope.payload.model_dump(mode="json")
-        payload_json = json.dumps(payload_dict, ensure_ascii=False)
-
-        candidates_dict = {
-            k: v.model_dump(mode="json") for k, v in envelope.field_candidates.items()
-        }
-        candidates_json = json.dumps(candidates_dict, ensure_ascii=False)
-
         comp_score = completeness.completeness_score if completeness else 1.0
+
+        # Source Document Metadata
+        filename = source_doc.filename if source_doc else f"{doc_id}.pdf"
+        rel_path = source_doc.path if source_doc else f"workspace/inbox/{filename}"
+        sha256 = source_doc.sha256 if source_doc else None
+        page_count = source_doc.page_count if source_doc else 1
+
+        val_status = "accepted" if validation.is_valid and not (validation.requires_review or (completeness and completeness.requires_review)) else "review_required"
 
         with self.get_connection() as conn:
             conn.execute("BEGIN TRANSACTION;")
             try:
-                # Upsert documents
+                # 1. Upsert documents
                 conn.execute(
                     """
                     INSERT INTO documents (document_id, filename, path, mime_type, sha256, page_count, received_at, status)
-                    VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
-                    ON CONFLICT(document_id) DO UPDATE SET status=excluded.status;
+                    VALUES (?, ?, ?, 'application/pdf', ?, ?, CURRENT_TIMESTAMP, ?)
+                    ON CONFLICT(document_id) DO UPDATE SET status=excluded.status, page_count=excluded.page_count;
                     """,
-                    [
-                        doc_id,
-                        f"{doc_id}.pdf",
-                        f"/workspace/inbox/{doc_id}.pdf",
-                        "application/pdf",
-                        doc_id.replace("doc_", ""),
-                        1,
-                        "validated" if validation.is_valid and not validation.requires_review else "review_required",
-                    ],
+                    [doc_id, filename, str(rel_path), sha256, page_count, val_status],
                 )
 
-                # Upsert business_documents
-                common = getattr(envelope.payload, "common", None)
-                doc_num = common.document_number if common else None
-                issue_date = common.issue_date if common else None
-                grand_total = (
-                    float(common.grand_total)
-                    if (common and common.grand_total is not None)
-                    else 0.0
-                )
+                # 2. Relational Projector
+                self.projector.project_and_store(conn, envelope, comp_score)
 
+                # 3. Insert Initial Canonical Version (v1, machine_extracted)
+                payload_json = envelope.payload.model_dump_json()
+                v1_id = f"ver_{doc_id}_1"
                 conn.execute(
                     """
-                    INSERT INTO business_documents (document_id, document_family, source_format, document_number, issue_date, currency, grand_total, canonical_payload_json, field_candidates_json, completeness_score, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-                    ON CONFLICT(document_id) DO UPDATE SET
-                        document_number=excluded.document_number,
-                        grand_total=excluded.grand_total,
-                        canonical_payload_json=excluded.canonical_payload_json,
-                        field_candidates_json=excluded.field_candidates_json,
-                        completeness_score=excluded.completeness_score;
+                    INSERT INTO canonical_versions (version_id, document_id, version_number, source, canonical_payload_json, created_at, reviewer, parent_version_id)
+                    VALUES (?, ?, 1, 'machine_extracted', ?, CURRENT_TIMESTAMP, 'system_pipeline', NULL)
+                    ON CONFLICT(version_id) DO NOTHING;
                     """,
-                    [
-                        doc_id,
-                        envelope.document_family.value,
-                        envelope.source_format.value,
-                        doc_num,
-                        issue_date,
-                        "VND",
-                        grand_total,
-                        payload_json,
-                        candidates_json,
-                        comp_score,
-                    ],
+                    [v1_id, doc_id, payload_json],
                 )
 
-                # Upsert parser attempt
-                if routing_decision:
+                # 4. Upsert Parser Attempts
+                if routing_outcome:
+                    self._store_parser_attempts(conn, doc_id, run_id, routing_outcome)
+                elif routing_decision:
                     qual_json = (
                         routing_decision.quality_report.model_dump_json()
                         if routing_decision.quality_report
@@ -259,8 +371,8 @@ class DuckDBStorage:
                     )
                     conn.execute(
                         """
-                        INSERT INTO parser_attempts (attempt_id, document_id, run_id, requested_parser, actual_parser, attempt_number, success, execution_time_seconds, error_message, quality_report_json)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        INSERT INTO parser_attempts (attempt_id, document_id, run_id, requested_parser, actual_parser, attempt_number, success, execution_time_seconds, error_message, quality_report_json, selected)
+                        VALUES (?, ?, ?, ?, ?, ?, NULL, TRUE, NULL, NULL, ?, TRUE)
                         ON CONFLICT(attempt_id) DO UPDATE SET actual_parser=excluded.actual_parser;
                         """,
                         [
@@ -270,14 +382,11 @@ class DuckDBStorage:
                             routing_decision.requested_parser,
                             routing_decision.actual_parser,
                             routing_decision.attempt_number,
-                            True,
-                            0.0,
-                            None,
                             qual_json,
                         ],
                     )
 
-                # Store validation issues
+                # 5. Store validation issues
                 for idx, issue in enumerate(validation.issues):
                     conn.execute(
                         """
@@ -296,22 +405,97 @@ class DuckDBStorage:
                         ],
                     )
 
-                # Store in review queue if review required
-                if validation.requires_review or (completeness and completeness.requires_review):
+                # 6. Store in review queue if review required
+                if val_status == "review_required":
+                    reason_msg = validation.issues[0].code if validation.issues else "completeness_review_required"
                     conn.execute(
                         """
                         INSERT INTO review_queue (review_id, document_id, reason, status, created_at, updated_at)
                         VALUES (?, ?, ?, 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                         ON CONFLICT(review_id) DO NOTHING;
                         """,
-                        [
-                            f"rev_{doc_id}",
-                            doc_id,
-                            validation.issues[0].code if validation.issues else "completeness_review_required",
-                        ],
+                        [f"rev_{doc_id}", doc_id, reason_msg],
                     )
 
                 conn.execute("COMMIT;")
             except Exception:
                 conn.execute("ROLLBACK;")
                 raise
+
+    def _store_parser_attempts(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        doc_id: str,
+        run_id: str,
+        routing_outcome: ParserRoutingOutcome,
+    ) -> None:
+        """Helper to log parser attempts into parser_attempts table."""
+        decision = routing_outcome.routing_decision
+
+        # Primary attempt
+        p_res = routing_outcome.primary_result
+        p_prov = p_res.document_ir.provenance if (p_res and p_res.document_ir) else None
+        p_exec_time = p_prov.execution_time_seconds if (p_prov and p_prov.execution_time_seconds is not None) else None
+        p_actual = p_prov.parser_id if p_prov else decision.requested_parser
+        p_selected = (routing_outcome.selected_result == p_res)
+        p_qual_json = decision.quality_report.model_dump_json() if (p_selected and decision.quality_report) else None
+
+        conn.execute(
+            """
+            INSERT INTO parser_attempts (attempt_id, document_id, run_id, requested_parser, actual_parser, attempt_number, fallback_type, success, execution_time_seconds, error_type, error_message, quality_report_json, selected)
+            VALUES (?, ?, ?, ?, ?, 1, NULL, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(attempt_id) DO UPDATE SET success=excluded.success, selected=excluded.selected;
+            """,
+            [
+                f"att_{doc_id}_1",
+                doc_id,
+                run_id,
+                decision.requested_parser,
+                p_actual,
+                p_res.success if p_res else False,
+                float(p_exec_time) if p_exec_time is not None else None,
+                "PARSER_ERROR" if (p_res and not p_res.success) else None,
+                p_res.error_message if p_res else None,
+                p_qual_json,
+                p_selected,
+            ],
+        )
+
+        # Fallback attempt if executed
+        if routing_outcome.fallback_result:
+            fb_res = routing_outcome.fallback_result
+            fb_prov = fb_res.document_ir.provenance if (fb_res and fb_res.document_ir) else None
+            fb_exec_time = fb_prov.execution_time_seconds if (fb_prov and fb_prov.execution_time_seconds is not None) else None
+            fb_requested = decision.fallback_requested_parser
+            fb_actual = fb_prov.parser_id if fb_prov else decision.fallback_actual_parser
+            fb_selected = (routing_outcome.selected_result == fb_res)
+            fb_qual_json = decision.quality_report.model_dump_json() if (fb_selected and decision.quality_report) else None
+
+            fallback_type = "parse_quality_fallback"
+            if decision.fallback_trigger:
+                if "unavailable" in decision.fallback_trigger.lower():
+                    fallback_type = "primary_unavailable"
+                elif "quality" in decision.fallback_trigger.lower() or "structure" in decision.fallback_trigger.lower():
+                    fallback_type = "parse_quality_fallback"
+
+            conn.execute(
+                """
+                INSERT INTO parser_attempts (attempt_id, document_id, run_id, requested_parser, actual_parser, attempt_number, fallback_type, success, execution_time_seconds, error_type, error_message, quality_report_json, selected)
+                VALUES (?, ?, ?, ?, ?, 2, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(attempt_id) DO UPDATE SET success=excluded.success, selected=excluded.selected;
+                """,
+                [
+                    f"att_{doc_id}_2",
+                    doc_id,
+                    run_id,
+                    fb_requested,
+                    fb_actual,
+                    fallback_type,
+                    fb_res.success if fb_res else False,
+                    float(fb_exec_time) if fb_exec_time is not None else None,
+                    "PARSER_ERROR" if (fb_res and not fb_res.success) else None,
+                    fb_res.error_message if fb_res else None,
+                    fb_qual_json,
+                    fb_selected,
+                ],
+            )
