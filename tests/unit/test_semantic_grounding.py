@@ -150,11 +150,11 @@ def test_ground_normalized_unicode_case_and_whitespace():
 
 def test_ground_decimal_by_canonical_value_without_numeric_substring_false_positive():
     grounded = EvidenceGrounder().ground(
-        _candidate("common.grand_total", Decimal("1250000")),
+        _candidate("common.grand_total", Decimal(1250000)),
         _document(),
     )
     wrong_quantity = EvidenceGrounder().ground(
-        _candidate("line_items[0].quantity", Decimal("1")),
+        _candidate("line_items[0].quantity", Decimal(1)),
         _document(),
     )
 
@@ -164,11 +164,42 @@ def test_ground_decimal_by_canonical_value_without_numeric_substring_false_posit
     assert wrong_quantity.grounding_status == GroundingStatus.UNSUPPORTED
 
 
+def test_numeric_grounding_rejects_identifier_suffixes_and_unrelated_amounts():
+    grounder = EvidenceGrounder()
+    document = _document()
+
+    for field_path, value in (
+        ("line_items[0].quantity", Decimal(1)),
+        ("line_items[0].quantity", Decimal(1)),
+        ("common.document_number", "1"),
+    ):
+        grounded = grounder.ground(_candidate(field_path, value), document)
+        assert grounded.grounding_status == GroundingStatus.UNSUPPORTED
+
+    document.pages[0].blocks.append(
+        BlockIR(block_id="b-unit-price", page_number=1, text="Đơn giá: 25.000")
+    )
+    grounded_price = grounder.ground(
+        _candidate("line_items[0].unit_price", Decimal(25000)), document
+    )
+    assert grounded_price.grounding_status == GroundingStatus.GROUNDED
+    assert grounded_price.match_method == GroundingMethod.DECIMAL_CANONICAL
+
+    document.pages[0].tables[0].cells.append(
+        TableCellIR(cell_id="c-quantity", row_index=1, col_index=1, text="1")
+    )
+    grounded_quantity = grounder.ground(
+        _candidate("line_items[0].quantity", Decimal(1)), document
+    )
+    assert grounded_quantity.grounding_status == GroundingStatus.GROUNDED
+    assert grounded_quantity.evidence_references[0].cell_id == "c-quantity"
+
+
 def test_raw_value_cannot_ground_a_different_canonical_value():
     grounded = EvidenceGrounder().ground(
         _candidate(
             "common.grand_total",
-            Decimal("999"),
+            Decimal(999),
             raw_value="Tổng thanh toán: 1.250.000 VND",
         ),
         _document(),

@@ -281,16 +281,19 @@ class EvidenceGrounder:
         if not probe:
             return None
 
-        if self._text_occurs(probe, source_text, self._is_identifier_field(field_path)):
+        identifier_field = self._is_identifier_field(field_path)
+        if identifier_field and not self._structured_identifier_occurs(probe, source_text):
+            return None
+
+        if self._text_occurs(probe, source_text, identifier_field):
             return GroundingMethod.EXACT_SOURCE, 1.0
 
         source_norm = self._normalize_for_match(source_text)
         probe_norm = self._normalize_for_match(probe)
-        if probe_norm and self._text_occurs(
-            probe_norm,
-            source_norm,
-            self._is_identifier_field(field_path),
-        ):
+        if probe_norm and (
+            not identifier_field
+            or self._structured_identifier_occurs(probe_norm, source_norm)
+        ) and self._text_occurs(probe_norm, source_norm, identifier_field):
             return GroundingMethod.NORMALIZED_TEXT, 1.0
 
         if self._allows_fuzzy(field_path):
@@ -316,6 +319,19 @@ class EvidenceGrounder:
         return re.search(rf"(?<!\w){re.escape(probe)}(?!\w)", source) is not None
 
     @staticmethod
+    def _structured_identifier_occurs(probe: str, source: str) -> bool:
+        """Match an identifier as a complete structured token, never a suffix."""
+        if probe.isdigit():
+            if source.strip() == probe:
+                return True
+            if len(probe) == 1:
+                return False
+            return re.search(
+                rf"(?<![\w./-]){re.escape(probe)}(?![\w./-])", source
+            ) is not None
+        return re.search(rf"(?<![\w-]){re.escape(probe)}(?![\w-])", source) is not None
+
+    @staticmethod
     def _normalize_for_match(value: str) -> str:
         clean, _, _ = normalize_text(value)
         return clean.casefold()
@@ -334,7 +350,7 @@ class EvidenceGrounder:
     def _numeric_tokens(value: str) -> List[str]:
         return [
             token.strip()
-            for token in re.findall(r"(?<!\w)-?\d[\d\s.,]*(?!\w)", value)
+            for token in re.findall(r"(?<![\w-])-?\d[\d\s.,]*(?!\w)", value)
             if token.strip()
         ]
 
