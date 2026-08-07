@@ -1,0 +1,52 @@
+# Example template for Private Real-Document Pilot Manifest
+# Copy to workspace/pilot/pilot_manifest.yaml (ignored by Git) for private local document runs.
+
+documents:
+  - id: private_sales_native_001
+    path: workspace/pilot/sales_native_invoice.pdf
+    expected_family: sales_invoice
+    expected_profile: native_pdf
+    audit_fields:
+      - document_number
+      - issue_date
+      - grand_total
+
+  - id: private_sales_scan_001
+    path: workspace/pilot/sales_scanned_invoice.pdf
+    expected_family: sales_invoice
+    expected_profile: scan_pdf
+    audit_fields:
+      - document_number
+      - grand_total
+
+  - id: private_utility_001
+    path: workspace/pilot/utility_electricity.pdf
+    expected_family: utility_consumption_invoice
+    expected_profile: native_pdf
+    audit_fields:
+      - billing_period
+      - grand_total
+
+  - id: private_utility_002
+    path: workspace/pilot/utility_water.pdf
+    expected_family: utility_consumption_invoice
+    expected_profile: native_pdf
+    audit_fields:
+      - billing_period
+      - grand_total
+
+  - id: private_tax_cert_001
+    path: workspace/pilot/tax_certificate_native.pdf
+    expected_family: tax_withholding_certificate
+    expected_profile: native_pdf
+    audit_fields:
+      - certificate_number
+      - withheld_tax
+
+  - id: private_hard_layout_001
+    path: workspace/pilot/hard_layout_fallback.pdf
+    expected_family: sales_invoice
+    expected_profile: scan_pdf
+    audit_fields:
+      - document_number
+      - grand_total

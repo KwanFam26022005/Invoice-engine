@@ -29,7 +29,7 @@ class TaxWithholdingMapper:
             document_ir, r"(?:ký hiệu|ky hieu|serial no)\s*:\s*([A-Za-z0-9\/\-]+)"
         )
         cert_num, cert_ev = find_text_evidence(
-            document_ir, r"(?:số chứng từ|so chung tu|cert no|số)\s*:\s*([A-Za-z0-9\/\-]+)"
+            document_ir, r"(?:số chứng từ|so chung tu|cert no|số|so)\s*:\s*([A-Za-z0-9\/\-]+)"
         )
         if cert_num:
             field_candidates["certificate_number"] = FieldCandidate(
@@ -72,7 +72,7 @@ class TaxWithholdingMapper:
         taxable_dec = parse_decimal(taxable_raw)[0] if taxable_raw else None
 
         withheld_raw, withheld_ev = find_text_evidence(
-            document_ir, r"(?:số thuế đã khấu trừ|so thue da khau tru|withheld tax)\s*:\s*([\d\.,\s]+)"
+            document_ir, r"(?:số thuế đã khấu trừ|so thue da khau tru|so thue thu nhap ca nhan da khau tru|withheld tax)\s*:\s*([\d\.,\s]+)"
         )
         withheld_dec = parse_decimal(withheld_raw)[0] if withheld_raw else None
 

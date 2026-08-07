@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "document-engine"
-version = "0.2.0"
+version = "0.3.0"
 description = "Universal Invoice and Business Document Processing Engine"
 readme = "README.md"
 requires-python = ">=3.10"

@@ -50,10 +50,10 @@ class SalesInvoiceMapper:
 
         # 4. Seller & Buyer
         seller_tax, seller_tax_ev = find_text_evidence(
-            document_ir, r"(?:mst|mã số thuế)\s*(?:bán|bên bán)?\s*:\s*([\d\-]+)"
+            document_ir, r"(?:mst|mã số thuế|ma so thue)\s*(?:bán|bên bán|ben ban)?\s*:\s*([\d\-]+)"
         )
         buyer_tax, buyer_tax_ev = find_text_evidence(
-            document_ir, r"(?:mst|mã số thuế)\s*(?:mua|bên mua)?\s*:\s*([\d\-]+)"
+            document_ir, r"(?:mst|mã số thuế|ma so thue)\s*(?:mua|bên mua|ben mua)?\s*:\s*([\d\-]+)"
         )
 
         seller = Party(tax_id=normalize_tax_id(seller_tax)[0] if seller_tax else None)
@@ -62,7 +62,7 @@ class SalesInvoiceMapper:
         # 5. Grand Total
         grand_raw, grand_ev = find_text_evidence(
             document_ir,
-            r"(?:tổng cộng|tong cong|total|tổng tiền thanh toán)\s*:\s*([\d\.,\s]+)",
+            r"(?:tổng cộng|tong cong|total|tổng tiền thanh toán|tong tien thanh toan)\s*:\s*([\d\.,\s]+)",
         )
         grand_total = parse_decimal(grand_raw)[0] if grand_raw else None
         if grand_total is not None:

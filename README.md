@@ -1,22 +1,18 @@
 # Universal Invoice and Business Document Engine
 
-A local-first enterprise document intake, inspection, parser routing, deterministic validation, DuckDB persistence, and human review system designed for complex business documents (invoices, utility statements, port services, tax withholding certificates, receipts, and supporting statements).
+A local-first enterprise document intake, inspection, parser routing, deterministic validation, DuckDB persistence, and human review system designed for complex Vietnamese business documents (invoices, utility statements, port services, tax withholding certificates, receipts, and supporting statements).
 
 ## Features
 
-- **Local-First & Privacy Preserving**: Zero cloud API dependencies, zero remote network calls, no telemetry.
-- **Fast Non-OCR Inspection**: PyMuPDF-based intake inspector categorizing document profiles (`native_pdf`, `scan_pdf`, `mixed_pdf`, `invalid_pdf`) without OCR overhead.
-- **Profile-Aware Parser Routing**: Dispatches native PDFs to fast PyMuPDF/Docling native parsers, scanned documents to Docling OCR (EasyOCR), and handles difficult documents via PaddleOCR-VL fallback.
-- **Common Document IR**: Structured representation containing pages, blocks, tables, raw geometry, parser provenance, and deterministic IDs (`doc_<sha256[:16]>`, `{doc_id}_p0001`, `{page_id}_b00001`, `{page_id}_t001`).
-- **Family Classification**: Multi-anchor classifier identifying 7 distinct document families (`sales_invoice`, `utility_consumption_invoice`, `service_volume_invoice`, `port_service_invoice`, `receipt`, `tax_withholding_certificate`, `supporting_statement`) plus `unknown`.
-- **Typed Schemas & Normalization**: Discriminated Pydantic business models using `Decimal` money representations and deterministic Vietnamese date/tax ID/amount/container normalizers.
-- **Deterministic Validation**: Configurable tolerance financial and consumption calculations (`closing - opening * factor == consumption`).
-- **DuckDB Storage**: Idempotent DDL migrations storing relational projections, evidence references, and full JSON canonical payloads within isolated per-document transactions.
-- **Human Review Queue**: Built-in audit trail and correction manager for flagged or unknown documents.
-- **Multi-Sheet Excel Export**: `openpyxl`-based exporter generating clean workbooks with auto-filters, frozen panes, and formula injection sanitization (`=`, `+`, `-`, `@`).
-
-> [!NOTE]
-> **Accuracy Disclaimer**: Unknown or low-completeness document layouts are routed to the human review queue rather than silently accepted.
+- **Local-First & Privacy Preserving**: 100% offline processing mode. Document data never leaves the local machine. Optional model prefetching requires explicit `ALLOW_MODEL_DOWNLOAD=1` opt-in.
+- **Isolated Worker Runtime Architecture**: Heavy parser runtimes (`Docling Native`, `Docling OCR`, and `PaddleOCR-VL`) run in dedicated isolated subprocess virtual environments via machine-readable JSON IPC, preventing base environment dependency bloat.
+- **Evidence-Grade Document IR**: Page-aware structured representation preserving exact page dimensions, text blocks, reading order, cell layout, bounding boxes, and parser provenance.
+- **Disambiguated Schema Model**: Missing or unextracted fields remain `Optional[Decimal] = None` to cleanly distinguish absent fields from valid `Decimal("0")` zero amounts.
+- **Specialized Evidence Mappers**: Dedicated family mappers (`sales_invoice`, `utility_consumption_invoice`, `tax_withholding_certificate`) linking extracted values directly to backing `EvidenceReference` blocks and table cells.
+- **Hardened Router & Structural Quality Gate**: Removes silent parser substitution and length-based heuristics. Dispatches via `ParseQualityReport` and semantic completeness scores.
+- **Two-Level Execution & Semantic Fallback Loop**: Automatically triggers fallback parsing when primary parsing is incomplete or fails critical validation rules.
+- **DuckDB Storage V2**: Persists relational projections, evidence references, completeness scores, quality reports, and canonical payloads in isolated document transactions.
+- **Private Real-Document Pilot Workflow**: Process private real-world local document samples using pilot manifests without committing confidential data to Git.
 
 ---
 
@@ -32,18 +28,44 @@ workspace/
 ├── runs/
 ├── exports/
 ├── review/
+├── pilot/
 ├── logs/
 └── cache/
 ```
 
 ---
 
-## Installation
+## Installation & Environment Setup
+
+Base installation:
 
 ```bash
-# Install package in editable mode with development dependencies
 python -m pip install -e ".[dev]"
 ```
+
+Setup dedicated heavy worker environments (Optional):
+
+```powershell
+# Setup Docling Native & Docling OCR worker environment
+.\scripts\setup_docling_env.ps1
+
+# Setup PaddleOCR-VL fallback worker environment
+.\scripts\setup_paddleocr_vl_env.ps1
+```
+
+---
+
+## Private Real-Document Pilot Workflow
+
+1. Copy pilot manifest template to ignored workspace directory:
+   ```bash
+   cp configs/pilot_manifest.example.yaml workspace/pilot/pilot_manifest.yaml
+   ```
+2. Configure local PDF paths in `workspace/pilot/pilot_manifest.yaml`.
+3. Run private pilot processing:
+   ```bash
+   python scripts/run_pilot.py --manifest workspace/pilot/pilot_manifest.yaml
+   ```
 
 ---
 
@@ -82,7 +104,7 @@ document-engine review-list
 Export run results to Excel:
 
 ```bash
-document-engine export --run-id "run_20260806"
+document-engine export --run-id "run_20260807"
 ```
 
 ---
@@ -93,14 +115,4 @@ Launch the Streamlit dashboard:
 
 ```bash
 python scripts/run_ui.py
-```
-
----
-
-## Archival Note
-
-For the legacy engine benchmark implementation (v1.0.0), refer to [`docs/legacy/benchmark_v1.md`](docs/legacy/benchmark_v1.md) or checkout tag:
-
-```bash
-git checkout benchmark-v1.0.0
 ```

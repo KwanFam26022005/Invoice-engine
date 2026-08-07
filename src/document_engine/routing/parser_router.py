@@ -38,7 +38,7 @@ class ParseQualityReport(BaseModel):
 
         # Check geometry coverage
         blocks_with_bbox = sum(
-            1 for p in doc_ir.pages for b in p.blocks if b.bbox is not None
+            1 for p in doc_ir.pages for b in p.blocks if b.geometry is not None and b.geometry.bbox
         )
         geom_coverage = blocks_with_bbox / blocks_cnt if blocks_cnt > 0 else 0.0
 
