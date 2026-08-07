@@ -18,3 +18,9 @@ config:
   use_chart_recognition: false
   use_seal_recognition: false
   use_ocr_for_image_block: false
+
+  # Optional local-only model directories.
+  # Do not commit personal absolute paths.
+  # Override at runtime via PADDLE_LAYOUT_MODEL_DIR and PADDLE_VL_REC_MODEL_DIR.
+  layout_detection_model_dir: null
+  vl_rec_model_dir: null

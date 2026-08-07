@@ -15,8 +15,21 @@ from document_engine.parsers.docling_native import dict_to_document_ir
 from document_engine.runtime import WorkerClient, WorkerRequest
 
 
+_DOCLING_OCR_DEFAULT_CONFIG: dict = {
+    "do_ocr": True,
+    "ocr_engine": "easyocr",
+    "ocr_languages": ["vi", "en"],
+    "do_table_structure": True,
+}
+
+
 class DoclingOCRParser(DocumentParser):
-    def __init__(self, worker_client: Optional[WorkerClient] = None):
+    def __init__(
+        self,
+        config: Optional[dict] = None,
+        worker_client: Optional[WorkerClient] = None,
+    ):
+        merged_config = {**_DOCLING_OCR_DEFAULT_CONFIG, **(config or {})}
         self._spec = ParserSpec(
             parser_id="docling_ocr",
             name="Docling OCR Parser (EasyOCR vi/en)",
@@ -28,12 +41,7 @@ class DoclingOCRParser(DocumentParser):
             ],
             requires_gpu=False,
             is_fallback=False,
-            config={
-                "do_ocr": True,
-                "ocr_engine": "easyocr",
-                "ocr_languages": ["vi", "en"],
-                "do_table_structure": True,
-            },
+            config=merged_config,
         )
         self.worker_client = worker_client or WorkerClient()
 

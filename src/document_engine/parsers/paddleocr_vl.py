@@ -15,8 +15,27 @@ from document_engine.parsers.docling_native import dict_to_document_ir
 from document_engine.runtime import WorkerClient, WorkerRequest
 
 
+_PADDLE_DEFAULT_CONFIG: dict = {
+    "mode": "local_fallback",
+    "pipeline_version": "v1.6",
+    "device": "cpu",
+    "engine": "paddle",
+    "use_doc_orientation_classify": False,
+    "use_doc_unwarping": False,
+    "use_layout_detection": True,
+    "use_chart_recognition": False,
+    "use_seal_recognition": False,
+    "use_ocr_for_image_block": False,
+}
+
+
 class PaddleOCRVLParser(DocumentParser):
-    def __init__(self, worker_client: Optional[WorkerClient] = None):
+    def __init__(
+        self,
+        config: Optional[dict] = None,
+        worker_client: Optional[WorkerClient] = None,
+    ):
+        merged_config = {**_PADDLE_DEFAULT_CONFIG, **(config or {})}
         self._spec = ParserSpec(
             parser_id="paddleocr_vl",
             name="PaddleOCR-VL Fallback Parser",
@@ -28,18 +47,7 @@ class PaddleOCRVLParser(DocumentParser):
             ],
             requires_gpu=False,
             is_fallback=True,
-            config={
-                "mode": "local_fallback",
-                "pipeline_version": "v1.6",
-                "device": "cpu",
-                "engine": "paddle",
-                "use_doc_orientation_classify": False,
-                "use_doc_unwarping": False,
-                "use_layout_detection": True,
-                "use_chart_recognition": False,
-                "use_seal_recognition": False,
-                "use_ocr_for_image_block": False,
-            },
+            config=merged_config,
         )
         self.worker_client = worker_client or WorkerClient()
 

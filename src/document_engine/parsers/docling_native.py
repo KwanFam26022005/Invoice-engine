@@ -68,8 +68,19 @@ def dict_to_document_ir(doc_dict: dict, profile: DocumentProfile) -> DocumentIR:
     )
 
 
+_DOCLING_NATIVE_DEFAULT_CONFIG: dict = {
+    "do_ocr": False,
+    "do_table_structure": True,
+}
+
+
 class DoclingNativeParser(DocumentParser):
-    def __init__(self, worker_client: Optional[WorkerClient] = None):
+    def __init__(
+        self,
+        config: Optional[dict] = None,
+        worker_client: Optional[WorkerClient] = None,
+    ):
+        merged_config = {**_DOCLING_NATIVE_DEFAULT_CONFIG, **(config or {})}
         self._spec = ParserSpec(
             parser_id="docling_native",
             name="Docling Native Parser",
@@ -77,7 +88,7 @@ class DoclingNativeParser(DocumentParser):
             supported_profiles=[PDFProfileType.NATIVE_PDF, PDFProfileType.MIXED_PDF],
             requires_gpu=False,
             is_fallback=False,
-            config={"do_ocr": False, "do_table_structure": True},
+            config=merged_config,
         )
         self.worker_client = worker_client or WorkerClient()
 

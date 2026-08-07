@@ -25,6 +25,40 @@ def get_runtime_versions() -> dict:
     return versions
 
 
+_WEIGHT_EXTENSIONS = frozenset({".pdiparams", ".safetensors", ".bin", ".onnx"})
+_CONFIG_EXTENSIONS = frozenset({".json", ".yaml", ".yml"})
+
+
+def has_model_artifacts(path: Path) -> bool:
+    """Check if a directory contains plausible model artifacts.
+
+    Requires at least one weight file OR one config/metadata file
+    of a recognized model format. Returns False if uncertain.
+    """
+    if not path.is_dir():
+        return False
+
+    has_weight = False
+    has_config = False
+
+    try:
+        for item in path.iterdir():
+            if item.is_file():
+                suffix = item.suffix.lower()
+                if suffix in _WEIGHT_EXTENSIONS:
+                    has_weight = True
+                elif suffix in _CONFIG_EXTENSIONS:
+                    has_config = True
+
+            if has_weight and has_config:
+                return True
+
+        # Accept if we have at least one known artifact type
+        return has_weight or has_config
+    except Exception:
+        return False
+
+
 def check_model_cache_status(options: dict) -> tuple[str, bool]:
     """Inspect local PaddleOCR model cache readiness."""
     layout_dir = options.get("layout_detection_model_dir")
@@ -41,17 +75,14 @@ def check_model_cache_status(options: dict) -> tuple[str, bool]:
         if not (p_layout.is_dir() and p_vl.is_dir()):
             return "LOCAL_MODEL_DIRS_INVALID", False
 
-        # Validate non-empty
-        try:
-            layout_has_files = any(p_layout.iterdir())
-            vl_has_files = any(p_vl.iterdir())
-        except Exception:
-            return "LOCAL_MODEL_DIRS_INVALID", False
+        layout_has_artifacts = has_model_artifacts(p_layout)
+        vl_has_artifacts = has_model_artifacts(p_vl)
 
-        if not (layout_has_files and vl_has_files):
-            return "LOCAL_MODEL_DIRS_INVALID", False
+        if layout_has_artifacts and vl_has_artifacts:
+            return "READY_LOCAL_MODEL_DIRS", True
 
-        return "READY_LOCAL_MODEL_DIRS", True
+        # Dirs exist but no recognized model artifacts
+        return "LOCAL_MODEL_DIRS_PARTIALLY_VERIFIED", False
 
     # 2. Inspect runtime default cache locations (~/.paddleocr and ~/.paddlex/official_models)
     user_home = Path.home()
@@ -66,6 +97,7 @@ def check_model_cache_status(options: dict) -> tuple[str, bool]:
         return "MODEL_CACHE_PARTIALLY_VERIFIED", False
 
     return "CACHE_MISSING", False
+
 
 
 def create_paddleocr_vl_pipeline(options: dict):

@@ -8,6 +8,7 @@ from document_engine.workers.paddleocr_vl_worker import (
     build_page_ir_from_paddle,
     check_model_cache_status,
     create_paddleocr_vl_pipeline,
+    has_model_artifacts,
 )
 
 
@@ -231,3 +232,112 @@ def test_healthcheck_request_carries_parser_options(monkeypatch):
     assert captured_request[0].operation == "healthcheck"
     assert captured_request[0].options["pipeline_version"] == "v1.6"
     assert captured_request[0].options["device"] == "cpu"
+
+
+def test_has_model_artifacts_empty_dir(tmp_path):
+    """Empty directory has no model artifacts."""
+    empty_dir = tmp_path / "empty"
+    empty_dir.mkdir()
+    assert has_model_artifacts(empty_dir) is False
+
+
+def test_has_model_artifacts_readme_only(tmp_path):
+    """Directory with only a README has no recognized model artifacts."""
+    dir_with_readme = tmp_path / "readme_only"
+    dir_with_readme.mkdir()
+    (dir_with_readme / "README.md").write_text("Just a readme", encoding="utf-8")
+    assert has_model_artifacts(dir_with_readme) is False
+
+
+def test_has_model_artifacts_with_weight_file(tmp_path):
+    """Directory with a .pdiparams weight file is recognized."""
+    model_dir = tmp_path / "with_weight"
+    model_dir.mkdir()
+    (model_dir / "model.pdiparams").write_text("weight", encoding="utf-8")
+    assert has_model_artifacts(model_dir) is True
+
+
+def test_has_model_artifacts_with_config_and_weight(tmp_path):
+    """Directory with both config and weight files is recognized."""
+    model_dir = tmp_path / "full_model"
+    model_dir.mkdir()
+    (model_dir / "config.json").write_text("{}", encoding="utf-8")
+    (model_dir / "model.safetensors").write_text("weight", encoding="utf-8")
+    assert has_model_artifacts(model_dir) is True
+
+
+def test_has_model_artifacts_nonexistent_path(tmp_path):
+    """Non-existent path returns False."""
+    assert has_model_artifacts(tmp_path / "does_not_exist") is False
+
+
+def test_check_model_cache_status_empty_dirs(tmp_path):
+    """Both dirs exist but are empty -> invalid."""
+    layout_dir = tmp_path / "layout"
+    vl_dir = tmp_path / "vl"
+    layout_dir.mkdir()
+    vl_dir.mkdir()
+
+    options = {
+        "layout_detection_model_dir": str(layout_dir),
+        "vl_rec_model_dir": str(vl_dir),
+    }
+    status, ready = check_model_cache_status(options)
+    assert status == "LOCAL_MODEL_DIRS_PARTIALLY_VERIFIED"
+    assert ready is False
+
+
+def test_check_model_cache_status_readme_only_dirs(tmp_path):
+    """Dirs exist with only README -> partially verified, not ready."""
+    layout_dir = tmp_path / "layout"
+    vl_dir = tmp_path / "vl"
+    layout_dir.mkdir()
+    vl_dir.mkdir()
+    (layout_dir / "README.md").write_text("readme", encoding="utf-8")
+    (vl_dir / "README.md").write_text("readme", encoding="utf-8")
+
+    options = {
+        "layout_detection_model_dir": str(layout_dir),
+        "vl_rec_model_dir": str(vl_dir),
+    }
+    status, ready = check_model_cache_status(options)
+    assert status == "LOCAL_MODEL_DIRS_PARTIALLY_VERIFIED"
+    assert ready is False
+
+
+def test_check_model_cache_status_plausible_artifacts(tmp_path):
+    """Both dirs with plausible model artifacts -> READY."""
+    layout_dir = tmp_path / "layout"
+    vl_dir = tmp_path / "vl"
+    layout_dir.mkdir()
+    vl_dir.mkdir()
+    (layout_dir / "model.pdiparams").write_text("w", encoding="utf-8")
+    (layout_dir / "config.yaml").write_text("cfg", encoding="utf-8")
+    (vl_dir / "model.safetensors").write_text("w", encoding="utf-8")
+    (vl_dir / "config.json").write_text("{}", encoding="utf-8")
+
+    options = {
+        "layout_detection_model_dir": str(layout_dir),
+        "vl_rec_model_dir": str(vl_dir),
+    }
+    status, ready = check_model_cache_status(options)
+    assert status == "READY_LOCAL_MODEL_DIRS"
+    assert ready is True
+
+
+def test_check_model_cache_status_one_valid_one_empty(tmp_path):
+    """One dir with artifacts, one empty -> partially verified."""
+    layout_dir = tmp_path / "layout"
+    vl_dir = tmp_path / "vl"
+    layout_dir.mkdir()
+    vl_dir.mkdir()
+    (layout_dir / "model.pdiparams").write_text("w", encoding="utf-8")
+    # vl_dir is empty
+
+    options = {
+        "layout_detection_model_dir": str(layout_dir),
+        "vl_rec_model_dir": str(vl_dir),
+    }
+    status, ready = check_model_cache_status(options)
+    assert status == "LOCAL_MODEL_DIRS_PARTIALLY_VERIFIED"
+    assert ready is False
