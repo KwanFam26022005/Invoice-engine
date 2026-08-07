@@ -1,0 +1,32 @@
+"""Failure taxonomy for document extraction and evaluation diagnostic categories."""
+
+from enum import Enum
+from typing import Optional
+from pydantic import BaseModel
+
+
+class FailureCategory(str, Enum):
+    PROFILE_MISMATCH = "PROFILE_MISMATCH"
+    PARSER_UNAVAILABLE = "PARSER_UNAVAILABLE"
+    PARSER_FAILED = "PARSER_FAILED"
+    EMPTY_PARSE = "EMPTY_PARSE"
+    LAYOUT_STRUCTURE_MISSING = "LAYOUT_STRUCTURE_MISSING"
+    CLASSIFICATION_MISMATCH = "CLASSIFICATION_MISMATCH"
+    FIELD_NOT_EXTRACTED = "FIELD_NOT_EXTRACTED"
+    FIELD_WRONG_VALUE = "FIELD_WRONG_VALUE"
+    FIELD_NO_EVIDENCE = "FIELD_NO_EVIDENCE"
+    TABLE_ROW_MISSING = "TABLE_ROW_MISSING"
+    TABLE_COLUMN_SHIFT = "TABLE_COLUMN_SHIFT"
+    NORMALIZATION_ERROR = "NORMALIZATION_ERROR"
+    VALIDATION_ERROR = "VALIDATION_ERROR"
+    SEMANTIC_FALLBACK_USED = "SEMANTIC_FALLBACK_USED"
+    PARSER_DISAGREEMENT = "PARSER_DISAGREEMENT"
+    UNKNOWN_DOCUMENT = "UNKNOWN_DOCUMENT"
+    HUMAN_REVIEW_REQUIRED = "HUMAN_REVIEW_REQUIRED"
+
+
+class FailureRecord(BaseModel):
+    category: FailureCategory
+    field_path: Optional[str] = None
+    message: str = ""
+    details: Optional[str] = None
