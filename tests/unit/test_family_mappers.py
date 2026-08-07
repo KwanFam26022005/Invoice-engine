@@ -14,6 +14,7 @@ from document_engine.ir.models import (
     TableIR,
 )
 from document_engine.schemas.family_schemas import MeterReading, TaxWithholdingCertificatePayload
+from document_engine.extraction.family_mappers.tax_withholding import TaxWithholdingMapper
 
 
 def test_missing_vs_zero_defaults():
@@ -84,3 +85,25 @@ def test_sales_invoice_family_mapper():
     comp = mapper.evaluate_completeness(envelope, doc_ir)
     assert comp.completeness_score == 1.0
     assert comp.requires_review is False
+
+
+def test_tax_mapper_keeps_calculation_income_zero_distinct_from_taxable_income():
+    source = SourceDocument(document_id="doc_tax", path="fake.pdf", filename="fake.pdf", sha256="hash", page_count=1)
+    profile = DocumentProfile(pdf_profile=PDFProfileType.NATIVE_PDF, has_text_layer=True)
+    block = BlockIR(block_id="b", page_number=1, text="""Mẫu số:\n01/ABC
+Ký hiệu:\nAA/26E
+Số (No):\nCERT-1
+Tổng thu nhập chịu thuế: 1000
+Tổng thu nhập tính thuế: 0
+Số thuế đã khấu trừ: 100
+Ngày (date) 07 tháng 08 năm 2026
+Mã tra cứu: LOOKUP-X""")
+    document = DocumentIR(document_id="doc_tax", source_document=source, profile=profile, provenance=ParserProvenance(parser_id="synthetic", parser_version="1"), pages=[PageIR(page_id="p", page_number=1, blocks=[block])], full_text=block.text)
+
+    payload, candidates = TaxWithholdingMapper().map(document)
+
+    assert payload.form_number == "01/ABC"
+    assert payload.total_taxable_income == Decimal(1000)
+    assert payload.total_tax_calculation_income == Decimal(0)
+    assert payload.lookup_code == "LOOKUP-X"
+    assert candidates["form_number"].evidence_references

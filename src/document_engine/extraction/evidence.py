@@ -32,6 +32,27 @@ def find_text_evidence(
     return None, []
 
 
+def find_anchor_value(
+    document_ir: DocumentIR, anchor_pattern: str, value_pattern: str = r"[^\n]+"
+) -> Tuple[Optional[str], List[EvidenceReference]]:
+    """Extract a same- or next-block value after a semantic anchor with evidence."""
+    anchor = re.compile(anchor_pattern, re.IGNORECASE)
+    value = re.compile(value_pattern)
+    blocks = [block for page in document_ir.pages for block in page.blocks if block.text.strip()]
+    for index, block in enumerate(blocks):
+        match = anchor.search(block.text)
+        if not match:
+            continue
+        candidates = [block.text[match.end():], *(item.text for item in blocks[index + 1 : index + 3])]
+        for candidate in candidates:
+            found = value.search(candidate.lstrip(" :\t\n"))
+            if found:
+                raw = found.group(0).strip()
+                if raw:
+                    return raw, [EvidenceReference(document_id=document_ir.document_id, page_number=block.page_number, block_id=block.block_id, bbox=block.geometry.bbox if block.geometry else None, source_text=raw, parser_id=document_ir.provenance.parser_id, parser_version=document_ir.provenance.parser_version)]
+    return None, []
+
+
 def find_table_evidence(
     document_ir: DocumentIR, cell: TableCellIR, table: TableIR, page_num: int
 ) -> EvidenceReference:

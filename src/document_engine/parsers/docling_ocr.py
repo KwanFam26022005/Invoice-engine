@@ -110,6 +110,7 @@ class DoclingOCRParser(DocumentParser):
                 parser_id=self.parser_id,
                 input_path=str(pdf_path),
                 document_id=document.document_id,
+                source_sha256=document.sha256,
                 page_count=document.page_count,
                 options=self.spec.config,
             )

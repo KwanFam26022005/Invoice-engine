@@ -59,6 +59,8 @@ class DocumentClassifier:
                     "san luong tieu thu",
                     "kỳ hóa đơn",
                     "ky hoa don",
+                    "tiền nước",
+                    "tien nuoc",
                 ],
                 "weak_anchors": ["kwh", "m3", "tiêu thụ", "điện lực", "cấp nước"],
                 "min_score": 2,

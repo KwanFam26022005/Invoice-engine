@@ -25,6 +25,17 @@ def get_runtime_versions() -> dict:
     return versions
 
 
+def easyocr_offline_runtime_ready(languages: list[str]) -> tuple[bool, str | None]:
+    """Verify EasyOCR's own vi/en model selection with downloads disabled."""
+    try:
+        import easyocr
+
+        easyocr.Reader(languages, download_enabled=False, verbose=False)
+        return True, None
+    except Exception as exc:
+        return False, type(exc).__name__
+
+
 def build_page_ir_from_docling(
     docling_doc, page_num: int, doc_id: str
 ) -> dict:
@@ -83,9 +94,11 @@ def build_page_ir_from_docling(
                         "block_id": f"{page_id}_b{block_idx}",
                         "page_number": page_num,
                         "text": text_str,
-                        "label": label_str,
+                        "block_type": label_str,
                         "reading_order": block_idx,
-                        "bbox": bbox_dict,
+                        "geometry": {"bbox": [bbox_dict[key] for key in ("x0", "y0", "x1", "y1")]}
+                        if bbox_dict
+                        else None,
                     }
                 )
                 block_idx += 1
@@ -116,9 +129,10 @@ def build_page_ir_from_docling(
                         {
                             "cell_id": f"{page_id}_t{table_idx}_r{r_idx}_c{c_idx}",
                             "row_index": r_idx,
-                            "column_index": c_idx,
+                            "col_index": c_idx,
                             "text": cell_text,
-                            "bbox": None,
+                            "geometry": None,
+                            "is_header": r_idx == 0,
                         }
                     )
 
@@ -127,7 +141,7 @@ def build_page_ir_from_docling(
                     "table_id": f"{page_id}_t{table_idx}",
                     "page_number": page_num,
                     "row_count": rows_cnt,
-                    "column_count": cols_cnt,
+                    "col_count": cols_cnt,
                     "cells": cells_data,
                     "bbox": None,
                 }
@@ -160,8 +174,17 @@ def main():
         parser_id = req_data.get("parser_id", "docling_native")
         input_path = req_data.get("input_path", "")
         doc_id = req_data.get("document_id", "doc_unknown")
+        source_sha256 = req_data.get("source_sha256", "")
         options = req_data.get("options", {})
         allow_model_download = req_data.get("allow_model_download", False)
+        download_allowed = allow_model_download or os.getenv("ALLOW_MODEL_DOWNLOAD") == "1"
+        # Docling's supported settings contract controls torch.compile. Disable this
+        # optional optimization only inside the isolated CPU worker on Windows.
+        os.environ.setdefault("DOCLING_INFERENCE_COMPILE_TORCH_MODELS", "false")
+        if not download_allowed:
+            # Keep normal worker execution offline. One-time preparation must opt in explicitly.
+            os.environ.setdefault("HF_HUB_OFFLINE", "1")
+            os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
         runtime_versions = get_runtime_versions()
 
@@ -170,19 +193,20 @@ def main():
 
         if operation == "healthcheck":
             has_easyocr = importlib.util.find_spec("easyocr") is not None
-            user_home = Path.home()
-            easyocr_model_dir = user_home / ".EasyOCR"
-            easyocr_cached = easyocr_model_dir.exists() and any(easyocr_model_dir.rglob("*.pth"))
-            runtime_ready = has_docling and (parser_id != "docling_ocr" or has_easyocr)
-            model_cache_ready = (
-                parser_id != "docling_ocr"
-                or easyocr_cached
-                or allow_model_download
-                or os.getenv("ALLOW_MODEL_DOWNLOAD") == "1"
+            languages = options.get("ocr_languages", ["vi", "en"])
+            package_ready = has_docling and (
+                parser_id != "docling_ocr" or has_easyocr
             )
+            model_cache_ready = True
+            model_cache_error = None
+            if parser_id == "docling_ocr" and has_easyocr:
+                model_cache_ready, model_cache_error = easyocr_offline_runtime_ready(
+                    languages
+                )
+            offline_runtime_ready = package_ready and model_cache_ready
             resp = {
                 "request_id": req_id,
-                "success": runtime_ready and model_cache_ready,
+                "success": offline_runtime_ready or (package_ready and download_allowed),
                 "actual_parser_id": parser_id,
                 "actual_parser_version": runtime_versions.get("docling", "2.0.0"),
                 "runtime_versions": runtime_versions,
@@ -192,8 +216,11 @@ def main():
                     "docling_version": runtime_versions.get("docling"),
                     "easyocr_installed": has_easyocr,
                     "easyocr_version": runtime_versions.get("easyocr"),
+                    "package_ready": package_ready,
                     "model_cache_ready": model_cache_ready,
-                    "runtime_ready": runtime_ready,
+                    "offline_runtime_ready": offline_runtime_ready,
+                    "runtime_ready": offline_runtime_ready,
+                    "model_cache_error": model_cache_error,
                 },
             }
             print(json.dumps(resp), flush=True)
@@ -231,10 +258,10 @@ def main():
             and os.getenv("ALLOW_MODEL_DOWNLOAD") != "1"
             and parser_id == "docling_ocr"
         ):
-            # Check if easyocr model cache exists or allow flag
-            user_home = Path.home()
-            easyocr_model_dir = user_home / ".EasyOCR"
-            if not easyocr_model_dir.exists():
+            offline_ready, _ = easyocr_offline_runtime_ready(
+                options.get("ocr_languages", ["vi", "en"])
+            )
+            if not offline_ready:
                 resp = {
                     "request_id": req_id,
                     "success": False,
@@ -242,7 +269,7 @@ def main():
                     "actual_parser_version": "2.0.0",
                     "runtime_versions": runtime_versions,
                     "error_type": "PARSER_UNAVAILABLE",
-                    "error_message": "EasyOCR models not cached and ALLOW_MODEL_DOWNLOAD is not set.",
+                    "error_message": "EasyOCR offline model cache is not ready and ALLOW_MODEL_DOWNLOAD is not set.",
                 }
                 print(json.dumps(resp), flush=True)
                 return
@@ -298,7 +325,8 @@ def main():
             "source_document": {
                 "document_id": doc_id,
                 "path": input_path,
-                "file_name": Path(input_path).name,
+                "filename": Path(input_path).name,
+                "sha256": source_sha256,
                 "page_count": page_count,
             },
             "provenance": {

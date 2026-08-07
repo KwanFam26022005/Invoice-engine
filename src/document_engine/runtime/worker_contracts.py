@@ -10,6 +10,7 @@ class WorkerRequest(BaseModel):
     operation: str = "parse"  # "parse" or "healthcheck"
     input_path: str = ""
     document_id: str = ""
+    source_sha256: str = ""
     page_count: int = 1
     options: Dict[str, Any] = Field(default_factory=dict)
     allow_model_download: bool = False

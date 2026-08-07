@@ -39,12 +39,43 @@ def test_worker_request_healthcheck_operation():
     assert "operation" in req.model_dump_json()
 
 
-def test_resolve_worker_python():
-    docling_python = resolve_worker_python("docling_native")
-    assert docling_python is not None
+def test_resolve_worker_python_windows_venv_is_independent_of_cwd(tmp_path, monkeypatch):
+    interpreter = tmp_path / ".venv-docling" / "Scripts" / "python.exe"
+    interpreter.parent.mkdir(parents=True)
+    interpreter.touch()
+    monkeypatch.chdir(tmp_path.parent)
 
-    paddle_python = resolve_worker_python("paddleocr_vl")
-    assert paddle_python is not None
+    resolved = resolve_worker_python("docling_native", repository_root=tmp_path)
+
+    assert resolved == str(interpreter.resolve())
+
+
+def test_resolve_worker_python_posix_venv(tmp_path):
+    interpreter = tmp_path / ".venv-docling" / "bin" / "python"
+    interpreter.parent.mkdir(parents=True)
+    interpreter.touch()
+
+    assert resolve_worker_python("docling_ocr", repository_root=tmp_path) == str(
+        interpreter.resolve()
+    )
+
+
+def test_resolve_worker_python_prefers_valid_override(tmp_path, monkeypatch):
+    dedicated = tmp_path / ".venv-docling" / "Scripts" / "python.exe"
+    dedicated.parent.mkdir(parents=True)
+    dedicated.touch()
+    override = tmp_path / "override-python.exe"
+    override.touch()
+    monkeypatch.setenv("DOCLING_WORKER_PYTHON", str(override))
+
+    assert resolve_worker_python("docling_ocr", repository_root=tmp_path) == str(
+        override.resolve()
+    )
+
+
+def test_resolve_worker_python_rejects_missing_dedicated_environment(tmp_path):
+    with pytest.raises(WorkerNotFoundError):
+        resolve_worker_python("docling_ocr", repository_root=tmp_path)
 
 
 def test_worker_client_unavailable_script():

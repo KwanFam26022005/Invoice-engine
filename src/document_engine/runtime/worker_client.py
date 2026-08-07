@@ -18,32 +18,33 @@ from document_engine.runtime.worker_errors import (
 logger = logging.getLogger(__name__)
 
 
-def resolve_worker_python(parser_id: str) -> str:
-    """Resolve Python interpreter path for a specific parser worker environment."""
-    if parser_id in ("docling_native", "docling_ocr"):
-        env_override = os.getenv("DOCLING_WORKER_PYTHON")
-        if env_override and Path(env_override).exists():
-            return env_override
-        # Default virtual environment paths
-        win_path = Path(".venv-docling/Scripts/python.exe")
-        posix_path = Path(".venv-docling/bin/python")
-        if win_path.exists():
-            return str(win_path.resolve())
-        if posix_path.exists():
-            return str(posix_path.resolve())
+def resolve_worker_python(parser_id: str, repository_root: Optional[Path] = None) -> str:
+    """Resolve a dedicated worker interpreter independently of the process CWD."""
+    root = repository_root or Path(__file__).resolve().parents[3]
+    contracts = {
+        "docling_native": ("DOCLING_WORKER_PYTHON", ".venv-docling"),
+        "docling_ocr": ("DOCLING_WORKER_PYTHON", ".venv-docling"),
+        "paddleocr_vl": ("PADDLE_WORKER_PYTHON", ".venv-paddlevl"),
+    }
+    if parser_id not in contracts:
+        return sys.executable
 
-    elif parser_id == "paddleocr_vl":
-        env_override = os.getenv("PADDLE_WORKER_PYTHON")
-        if env_override and Path(env_override).exists():
-            return env_override
-        win_path = Path(".venv-paddlevl/Scripts/python.exe")
-        posix_path = Path(".venv-paddlevl/bin/python")
-        if win_path.exists():
-            return str(win_path.resolve())
-        if posix_path.exists():
-            return str(posix_path.resolve())
+    override_name, venv_name = contracts[parser_id]
+    env_override = os.getenv(override_name)
+    if env_override and Path(env_override).is_file():
+        return str(Path(env_override).resolve())
 
-    return sys.executable
+    candidates = (
+        root / venv_name / "Scripts" / "python.exe",
+        root / venv_name / "bin" / "python",
+    )
+    for candidate in candidates:
+        if candidate.is_file():
+            return str(candidate.resolve())
+
+    raise WorkerNotFoundError(
+        f"Dedicated worker interpreter for '{parser_id}' is unavailable under {venv_name}."
+    )
 
 
 def resolve_worker_script(parser_id: str) -> str:
