@@ -53,7 +53,7 @@ def test_review_queue_and_human_correction(tmp_path: Path):
     # Apply correction
     corr = review_mgr.apply_correction(
         document_id="doc_rev123",
-        field_path="document_number",
+        field_path="common.document_number",
         new_value="INV-CORRECTED",
         reviewer="auditor_01",
     )
