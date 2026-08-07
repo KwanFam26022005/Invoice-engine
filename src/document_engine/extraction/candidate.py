@@ -1,6 +1,6 @@
 """Candidate extraction data structure and completeness evaluation."""
 
-from typing import Dict, List, Literal, Optional
+from typing import Dict, List, Literal
 from pydantic import BaseModel, Field
 
 from document_engine.schemas.family_schemas import FieldCandidate

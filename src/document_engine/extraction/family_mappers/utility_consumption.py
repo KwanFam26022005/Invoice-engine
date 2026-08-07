@@ -1,11 +1,10 @@
 """Utility Consumption Invoice specialized family mapper."""
 
 from decimal import Decimal
-import re
 from typing import Dict, List, Tuple
 
-from document_engine.extraction.evidence import find_table_evidence, find_text_evidence
-from document_engine.extraction.normalizer import parse_date, parse_decimal
+from document_engine.extraction.evidence import find_text_evidence
+from document_engine.extraction.normalizer import parse_decimal
 from document_engine.ir.models import DocumentIR
 from document_engine.schemas.family_schemas import (
     CommonDocumentFields,
@@ -32,26 +31,26 @@ class UtilityConsumptionMapper:
             )
 
         # 2. Customer / Contract Number
-        contract_num, contract_ev = find_text_evidence(
+        contract_num, _contract_ev = find_text_evidence(
             document_ir, r"(?:mã khách hàng|ma khach hang|số hợp đồng|contract no)\s*:\s*([A-Za-z0-9\-]+)"
         )
 
         # 3. Service Location
-        location, location_ev = find_text_evidence(
+        location, _location_ev = find_text_evidence(
             document_ir, r"(?:địa chỉ sử dụng|dia chi su dung|location)\s*:\s*([^\n]+)"
         )
 
         # 4. Meter Readings
-        meter_num, meter_ev = find_text_evidence(
+        meter_num, _meter_ev = find_text_evidence(
             document_ir, r"(?:số công tơ|so cong to|meter no)\s*:\s*([A-Za-z0-9\-]+)"
         )
-        op_raw, op_ev = find_text_evidence(
+        op_raw, _op_ev = find_text_evidence(
             document_ir, r"(?:chỉ số đầu|chi so dau|opening reading)\s*:\s*([\d\.,]+)"
         )
-        cl_raw, cl_ev = find_text_evidence(
+        cl_raw, _cl_ev = find_text_evidence(
             document_ir, r"(?:chỉ số cuối|chi so cuoi|closing reading)\s*:\s*([\d\.,]+)"
         )
-        cons_raw, cons_ev = find_text_evidence(
+        cons_raw, _cons_ev = find_text_evidence(
             document_ir, r"(?:sản lượng|san luong|tiêu thụ|consumption)\s*:\s*([\d\.,]+)"
         )
 
@@ -85,7 +84,7 @@ class UtilityConsumptionMapper:
                 if table.row_count > 1:
                     rows_dict: Dict[int, Dict[int, str]] = {}
                     for c in table.cells:
-                        rows_dict.setdefault(c.row_index, {})[c.column_index] = c.text
+                        rows_dict.setdefault(c.row_index, {})[c.col_index] = c.text
 
                     for r_idx in sorted(rows_dict.keys()):
                         if r_idx == 0:

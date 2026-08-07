@@ -2,7 +2,6 @@
 
 from decimal import Decimal
 from document_engine.core.models import DocumentFamilyType, PDFProfileType
-from document_engine.extraction.candidate import FamilyCompletenessReport
 from document_engine.extraction.mapper import DocumentMapper
 from document_engine.ir.models import (
     BlockIR,
@@ -77,10 +76,10 @@ def test_sales_invoice_family_mapper():
     assert envelope.payload.common.document_number == "INV-2026-001"
     assert envelope.payload.common.seller.tax_id == "010999888"
     assert envelope.payload.common.buyer.tax_id == "010111222"
-    assert envelope.payload.common.grand_total == Decimal("10000000")
+    assert envelope.payload.common.grand_total == Decimal(10000000)
     assert len(envelope.payload.line_items) == 1
     assert envelope.payload.line_items[0].description == "Dịch vụ IT"
-    assert envelope.payload.line_items[0].amount == Decimal("10000000")
+    assert envelope.payload.line_items[0].amount == Decimal(10000000)
 
     comp = mapper.evaluate_completeness(envelope, doc_ir)
     assert comp.completeness_score == 1.0

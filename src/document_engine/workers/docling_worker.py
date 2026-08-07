@@ -34,13 +34,15 @@ def build_page_ir_from_docling(
     tables = []
 
     # Determine page size if available
-    width = 595.0
-    height = 842.0
+    width = None
+    height = None
     if hasattr(docling_doc, "pages") and isinstance(docling_doc.pages, dict):
         page_obj = docling_doc.pages.get(page_num)
         if page_obj and hasattr(page_obj, "size") and page_obj.size:
-            width = float(getattr(page_obj.size, "width", 595.0))
-            height = float(getattr(page_obj.size, "height", 842.0))
+            w_val = getattr(page_obj.size, "width", None)
+            h_val = getattr(page_obj.size, "height", None)
+            width = float(w_val) if w_val is not None else None
+            height = float(h_val) if h_val is not None else None
 
     page_texts = []
     block_idx = 0
@@ -191,24 +193,26 @@ def main():
             return
 
         # Check offline policy flag
-        if not allow_model_download and os.getenv("ALLOW_MODEL_DOWNLOAD") != "1":
-            # For OCR engine or model weights download
-            if parser_id == "docling_ocr":
-                # Check if easyocr model cache exists or allow flag
-                user_home = Path.home()
-                easyocr_model_dir = user_home / ".EasyOCR"
-                if not easyocr_model_dir.exists():
-                    resp = {
-                        "request_id": req_id,
-                        "success": False,
-                        "actual_parser_id": parser_id,
-                        "actual_parser_version": "2.0.0",
-                        "runtime_versions": runtime_versions,
-                        "error_type": "PARSER_UNAVAILABLE",
-                        "error_message": "EasyOCR models not cached and ALLOW_MODEL_DOWNLOAD is not set.",
-                    }
-                    print(json.dumps(resp), flush=True)
-                    return
+        if (
+            not allow_model_download
+            and os.getenv("ALLOW_MODEL_DOWNLOAD") != "1"
+            and parser_id == "docling_ocr"
+        ):
+            # Check if easyocr model cache exists or allow flag
+            user_home = Path.home()
+            easyocr_model_dir = user_home / ".EasyOCR"
+            if not easyocr_model_dir.exists():
+                resp = {
+                    "request_id": req_id,
+                    "success": False,
+                    "actual_parser_id": parser_id,
+                    "actual_parser_version": "2.0.0",
+                    "runtime_versions": runtime_versions,
+                    "error_type": "PARSER_UNAVAILABLE",
+                    "error_message": "EasyOCR models not cached and ALLOW_MODEL_DOWNLOAD is not set.",
+                }
+                print(json.dumps(resp), flush=True)
+                return
 
         # Import docling converter modules
         from docling.document_converter import DocumentConverter, PdfFormatOption
@@ -287,7 +291,7 @@ def main():
         print(json.dumps(resp), flush=True)
 
     except Exception as e:
-        logger.error("Docling worker error: %s", e, exc_info=True)
+        logger.exception("Docling worker error")
         resp = {
             "request_id": req_data.get("request_id", "req_unknown")
             if "req_data" in locals()
@@ -299,7 +303,7 @@ def main():
             "actual_parser_version": "2.0.0",
             "runtime_versions": get_runtime_versions(),
             "error_type": "WORKER_PARSE_FAILED",
-            "error_message": f"Docling parsing failed: {str(e)}",
+            "error_message": f"Docling parsing failed: {e!s}",
         }
         print(json.dumps(resp), flush=True)
 

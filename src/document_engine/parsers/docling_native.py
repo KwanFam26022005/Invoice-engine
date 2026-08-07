@@ -1,6 +1,5 @@
 """Docling native parser adapter for layout & table extraction on native PDFs via isolated worker."""
 
-import time
 from pathlib import Path
 from typing import List, Optional
 
@@ -36,8 +35,8 @@ def dict_to_document_ir(doc_dict: dict, profile: DocumentProfile) -> DocumentIR:
             PageIR(
                 page_id=p_dict["page_id"],
                 page_number=p_dict["page_number"],
-                width=p_dict.get("width", 595.0),
-                height=p_dict.get("height", 842.0),
+                width=p_dict.get("width"),
+                height=p_dict.get("height"),
                 blocks=blocks,
                 tables=tables,
                 text_content=p_dict.get("text_content", ""),

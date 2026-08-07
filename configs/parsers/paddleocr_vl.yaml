@@ -10,8 +10,11 @@ requires_gpu: false
 is_fallback: true
 config:
   pipeline_version: v1.6
-  use_gpu: false
-  use_angle_cls: false
-  use_doc_unwarp: false
+  device: cpu
+  engine: paddle
   use_doc_orientation_classify: false
-  layout: true
+  use_doc_unwarping: false
+  use_layout_detection: true
+  use_chart_recognition: false
+  use_seal_recognition: false
+  use_ocr_for_image_block: false

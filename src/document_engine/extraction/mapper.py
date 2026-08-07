@@ -12,7 +12,6 @@ from document_engine.extraction.family_mappers.utility_consumption import Utilit
 from document_engine.ir.models import DocumentIR
 from document_engine.schemas.family_schemas import (
     BusinessDocumentEnvelope,
-    CommonDocumentFields,
     FieldCandidate,
     PortServiceInvoicePayload,
     ReceiptPayload,

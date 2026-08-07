@@ -1,8 +1,9 @@
-"""Check script for PaddleOCR-VL environment status without downloading models."""
+"""Check script for PaddleOCR-VL environment status and model artifact readiness."""
 
 import importlib.util
 from pathlib import Path
 import sys
+
 
 def check_paddle_env():
     print("--- PaddleOCR-VL Environment Status ---")
@@ -17,16 +18,20 @@ def check_paddle_env():
 
     if has_paddle:
         import paddle
+
         print(f"paddle version: {getattr(paddle, '__version__', 'installed')}")
 
     if has_paddleocr:
         import paddleocr
+
         print(f"paddleocr version: {getattr(paddleocr, '__version__', 'installed')}")
 
     user_home = Path.home()
     paddle_cache = user_home / ".paddleocr"
-    print(f"Paddle model cache present: {paddle_cache.exists()} ({paddle_cache})")
+    has_pdiparams = paddle_cache.exists() and any(paddle_cache.rglob("*.pdiparams"))
+    print(f"Paddle model artifacts present (.pdiparams): {has_pdiparams} ({paddle_cache})")
     print("--------------------------------------")
+
 
 if __name__ == "__main__":
     check_paddle_env()

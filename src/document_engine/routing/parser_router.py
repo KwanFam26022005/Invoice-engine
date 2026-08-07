@@ -226,9 +226,7 @@ class ParserRouter:
             return True
         if quality.placeholder_detected:
             return True
-        if quality.nonempty_page_ratio < 0.5:
-            return True
-        return False
+        return quality.nonempty_page_ratio < 0.5
 
     def _get_parser_or_none(self, parser_id: str) -> tuple[Optional[DocumentParser], str]:
         """Fetch parser without silent substitution."""

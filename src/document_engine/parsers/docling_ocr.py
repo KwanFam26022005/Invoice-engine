@@ -1,8 +1,7 @@
 """Docling OCR parser adapter for scanned & image-only PDFs via isolated worker."""
 
-import time
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
 from document_engine.core.models import PDFProfileType
 from document_engine.ir.models import (

@@ -11,13 +11,13 @@ from document_engine.runtime.worker_errors import (
 )
 
 __all__ = [
+    "ParserUnavailableError",
     "WorkerClient",
-    "resolve_worker_python",
+    "WorkerError",
+    "WorkerExecutionError",
+    "WorkerNotFoundError",
     "WorkerRequest",
     "WorkerResponse",
-    "WorkerError",
-    "WorkerNotFoundError",
     "WorkerTimeoutError",
-    "WorkerExecutionError",
-    "ParserUnavailableError",
+    "resolve_worker_python",
 ]

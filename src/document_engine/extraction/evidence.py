@@ -3,7 +3,7 @@
 import re
 from typing import List, Optional, Tuple
 
-from document_engine.ir.models import BlockIR, DocumentIR, EvidenceReference, TableCellIR, TableIR
+from document_engine.ir.models import DocumentIR, EvidenceReference, TableCellIR, TableIR
 
 
 def find_text_evidence(

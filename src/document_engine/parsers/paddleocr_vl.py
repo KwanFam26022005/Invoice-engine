@@ -31,8 +31,14 @@ class PaddleOCRVLParser(DocumentParser):
             config={
                 "mode": "local_fallback",
                 "pipeline_version": "v1.6",
-                "use_gpu": False,
-                "layout": True,
+                "device": "cpu",
+                "engine": "paddle",
+                "use_doc_orientation_classify": False,
+                "use_doc_unwarping": False,
+                "use_layout_detection": True,
+                "use_chart_recognition": False,
+                "use_seal_recognition": False,
+                "use_ocr_for_image_block": False,
             },
         )
         self.worker_client = worker_client or WorkerClient()
@@ -56,11 +62,12 @@ class PaddleOCRVLParser(DocumentParser):
             allow_dl = os.getenv("ALLOW_MODEL_DOWNLOAD") == "1"
             user_home = Path.home()
             paddle_dir = user_home / ".paddleocr"
-            if not paddle_dir.exists() and not allow_dl:
+            has_params = paddle_dir.exists() and any(paddle_dir.rglob("*.pdiparams"))
+            if not has_params and not allow_dl:
                 return ParserHealth(
                     parser_id=self.parser_id,
                     healthy=False,
-                    message="PaddleOCR-VL model cache missing and ALLOW_MODEL_DOWNLOAD is not set",
+                    message="PaddleOCR-VL model artifacts missing in cache and ALLOW_MODEL_DOWNLOAD is not set",
                     dependencies_available=True,
                 )
             return ParserHealth(

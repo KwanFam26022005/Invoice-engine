@@ -1,6 +1,5 @@
 """Unit tests for isolated worker runtime, IPC contracts, and error handling."""
 
-import os
 import pytest
 from document_engine.runtime.worker_client import WorkerClient, resolve_worker_python
 from document_engine.runtime.worker_contracts import WorkerRequest, WorkerResponse

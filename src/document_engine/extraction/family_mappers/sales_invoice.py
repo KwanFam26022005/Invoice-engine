@@ -1,19 +1,16 @@
 """Sales Invoice specialized family mapper."""
 
-from decimal import Decimal
-import re
 from typing import Dict, List, Tuple
 
 from document_engine.extraction.evidence import find_table_evidence, find_text_evidence
 from document_engine.extraction.normalizer import normalize_tax_id, parse_date, parse_decimal
-from document_engine.ir.models import DocumentIR, EvidenceReference
+from document_engine.ir.models import DocumentIR
 from document_engine.schemas.family_schemas import (
     CommonDocumentFields,
     FieldCandidate,
     LineItem,
     Party,
     SalesInvoicePayload,
-    TaxBreakdown,
 )
 
 
@@ -33,7 +30,7 @@ class SalesInvoiceMapper:
             )
 
         # 2. Series
-        series, series_ev = find_text_evidence(
+        series, _series_ev = find_text_evidence(
             document_ir, r"(?:ký hiệu|ky hieu|series)\s*:\s*([A-Za-z0-9\/\-]+)"
         )
 
@@ -49,10 +46,10 @@ class SalesInvoiceMapper:
             )
 
         # 4. Seller & Buyer
-        seller_tax, seller_tax_ev = find_text_evidence(
+        seller_tax, _seller_tax_ev = find_text_evidence(
             document_ir, r"(?:mst|mã số thuế|ma so thue)\s*(?:bán|bên bán|ben ban)?\s*:\s*([\d\-]+)"
         )
-        buyer_tax, buyer_tax_ev = find_text_evidence(
+        buyer_tax, _buyer_tax_ev = find_text_evidence(
             document_ir, r"(?:mst|mã số thuế|ma so thue)\s*(?:mua|bên mua|ben mua)?\s*:\s*([\d\-]+)"
         )
 

@@ -127,8 +127,8 @@ class BlockIR(BaseModel):
 class PageIR(BaseModel):
     page_id: str
     page_number: int
-    width: float
-    height: float
+    width: Optional[float] = None
+    height: Optional[float] = None
     blocks: List[BlockIR] = Field(default_factory=list)
     tables: List[TableIR] = Field(default_factory=list)
     text_content: str = ""

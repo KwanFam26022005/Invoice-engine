@@ -40,6 +40,7 @@ def main():
         doc_id = entry.get("id")
         pdf_path = Path(entry.get("path"))
         expected_family = entry.get("expected_family")
+        manual_audit = entry.get("manual_audit_status", "NOT_AUDITED")
 
         if not pdf_path.exists():
             print(f"[{doc_id}] SKIPPED - File not found: {pdf_path}")
@@ -48,6 +49,8 @@ def main():
                     "id": doc_id,
                     "status": "SKIPPED_MISSING_FILE",
                     "path": str(pdf_path),
+                    "system_validation_status": "skipped",
+                    "manual_audit_status": manual_audit,
                 }
             )
             continue
@@ -69,16 +72,16 @@ def main():
                 "expected_family": expected_family,
                 "extracted_fields": extracted_fields,
                 "evidence_count": evidence_count,
-                "validation_status": res.validation_status,
+                "system_validation_status": res.validation_status,
                 "completeness_score": res.completeness.completeness_score if res.completeness else 0.0,
-                "manual_audit": "PASS" if res.validation_status == "accepted" else "NEEDS_REVIEW",
+                "manual_audit_status": manual_audit,
             }
             reports.append(report)
-            print(f"[{doc_id}] {res.pdf_profile} | Parser: {res.selected_parser} | Family: {res.document_family} | Score: {report['completeness_score']:.2f} | Status: {res.validation_status}")
+            print(f"[{doc_id}] {res.pdf_profile} | Parser: {res.selected_parser} | Family: {res.document_family} | Score: {report['completeness_score']:.2f} | Validation: {res.validation_status} | Audit: {manual_audit}")
 
         except Exception as err:
             print(f"[{doc_id}] ERROR - {err}")
-            reports.append({"id": doc_id, "status": "ERROR", "error": str(err)})
+            reports.append({"id": doc_id, "status": "ERROR", "error": str(err), "system_validation_status": "error", "manual_audit_status": manual_audit})
 
     print("\n=== Pilot Report Summary ===")
     print(yaml.dump({"pilot_results": reports}, sort_keys=False))

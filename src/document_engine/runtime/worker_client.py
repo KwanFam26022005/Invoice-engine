@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-from typing import Dict, Optional
+from typing import Optional
 
 from document_engine.runtime.worker_contracts import WorkerRequest, WorkerResponse
 from document_engine.runtime.worker_errors import (
@@ -142,5 +142,5 @@ class WorkerClient:
             )
         except Exception as e:
             if isinstance(e, (WorkerNotFoundError, WorkerTimeoutError)):
-                raise e
+                raise
             raise WorkerExecutionError(f"Failed to launch worker subprocess: {e}") from e

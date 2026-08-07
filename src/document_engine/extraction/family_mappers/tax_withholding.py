@@ -1,7 +1,5 @@
 """Tax Withholding Certificate specialized family mapper."""
 
-from decimal import Decimal
-import re
 from typing import Dict, Tuple
 
 from document_engine.extraction.evidence import find_text_evidence
@@ -40,7 +38,7 @@ class TaxWithholdingMapper:
         payer_name, _ = find_text_evidence(
             document_ir, r"(?:tên tổ chức trả thu nhập|to chuc tra thu nhap)\s*:\s*([^\n]+)"
         )
-        payer_tax, payer_ev = find_text_evidence(
+        payer_tax, _payer_ev = find_text_evidence(
             document_ir, r"(?:mã số thuế tổ chức trả|mst tổ chức|mst bên trả)\s*:\s*([\d\-]+)"
         )
         payer_party = Party(
@@ -52,7 +50,7 @@ class TaxWithholdingMapper:
         recip_name, recip_name_ev = find_text_evidence(
             document_ir, r"(?:họ và tên|ho va ten|cá nhân|recip name)\s*:\s*([^\n]+)"
         )
-        recip_tax, recip_tax_ev = find_text_evidence(
+        recip_tax, _recip_tax_ev = find_text_evidence(
             document_ir, r"(?:mã số thuế cá nhân|mst cá nhân)\s*:\s*([\d\-]+)"
         )
         recip_party = Party(
@@ -66,7 +64,7 @@ class TaxWithholdingMapper:
             )
 
         # 4. Incomes & Tax
-        taxable_raw, taxable_ev = find_text_evidence(
+        taxable_raw, _taxable_ev = find_text_evidence(
             document_ir, r"(?:tổng thu nhập chịu thuế|tong thu nhap chiu thue)\s*:\s*([\d\.,\s]+)"
         )
         taxable_dec = parse_decimal(taxable_raw)[0] if taxable_raw else None
@@ -82,7 +80,7 @@ class TaxWithholdingMapper:
             )
 
         # 5. Dates
-        sig_date_raw, sig_ev = find_text_evidence(
+        sig_date_raw, _sig_ev = find_text_evidence(
             document_ir, r"(?:ngày ký|ngay ky|signature date)\s*:?\s*(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{4})"
         )
         sig_date = parse_date(sig_date_raw)[0] if sig_date_raw else None
