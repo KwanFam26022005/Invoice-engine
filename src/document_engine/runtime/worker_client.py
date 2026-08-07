@@ -24,6 +24,10 @@ def resolve_worker_python(parser_id: str, repository_root: Optional[Path] = None
     contracts = {
         "docling_native": ("DOCLING_WORKER_PYTHON", ".venv-docling"),
         "docling_ocr": ("DOCLING_WORKER_PYTHON", ".venv-docling"),
+        "docling_semantic": (
+            "DOCLING_SEMANTIC_WORKER_PYTHON",
+            ".venv-docling-semantic",
+        ),
         "paddleocr_vl": ("PADDLE_WORKER_PYTHON", ".venv-paddlevl"),
     }
     if parser_id not in contracts:
@@ -52,6 +56,8 @@ def resolve_worker_script(parser_id: str) -> str:
     root_dir = Path(__file__).resolve().parents[2]
     if parser_id in ("docling_native", "docling_ocr"):
         script_path = root_dir / "document_engine" / "workers" / "docling_worker.py"
+    elif parser_id == "docling_semantic":
+        script_path = root_dir / "document_engine" / "workers" / "docling_semantic_worker.py"
     elif parser_id == "paddleocr_vl":
         script_path = root_dir / "document_engine" / "workers" / "paddleocr_vl_worker.py"
     else:
