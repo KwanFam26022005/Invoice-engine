@@ -53,6 +53,7 @@ class PaddleOCRVLParser(DocumentParser):
                 request_id="req_healthcheck_paddleocr_vl",
                 parser_id=self.parser_id,
                 operation="healthcheck",
+                options=self.spec.config,
                 allow_model_download=os.getenv("ALLOW_MODEL_DOWNLOAD") == "1",
             )
             resp = self.worker_client.execute_worker(req)

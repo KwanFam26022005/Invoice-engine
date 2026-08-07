@@ -1,4 +1,4 @@
-"""Unit tests for PaddleOCR-VL worker output mapping, API parameters, generator contract, and offline policy."""
+"""Unit tests for PaddleOCR-VL worker output mapping, API parameters, generator contract, offline cache policy, and healthcheck."""
 
 import sys
 from unittest.mock import MagicMock
@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 from document_engine.parsers.paddleocr_vl import PaddleOCRVLParser
 from document_engine.workers.paddleocr_vl_worker import (
     build_page_ir_from_paddle,
+    check_model_cache_status,
     create_paddleocr_vl_pipeline,
 )
 
@@ -127,7 +128,6 @@ def test_create_paddleocr_vl_pipeline_constructor_kwargs(monkeypatch):
 
     class MockPaddleOCRVL:
         def __init__(self, **kwargs):
-            # Fail if deprecated/unsupported kwargs are passed
             forbidden = {"use_gpu", "use_angle_cls", "use_doc_unwarp"}
             for key in kwargs:
                 if key in forbidden:
@@ -157,14 +157,77 @@ def test_create_paddleocr_vl_pipeline_constructor_kwargs(monkeypatch):
     assert captured_kwargs["engine"] == "paddle"
     assert captured_kwargs["use_layout_detection"] is True
 
-    # Assert forbidden kwargs are not present in captured kwargs
     assert "use_gpu" not in captured_kwargs
     assert "use_angle_cls" not in captured_kwargs
     assert "use_doc_unwarp" not in captured_kwargs
 
 
-def test_paddleocr_vl_healthcheck():
-    parser = PaddleOCRVLParser()
+def test_check_model_cache_status_explicit_valid_local_dirs(tmp_path):
+    layout_dir = tmp_path / "layout_model"
+    vl_rec_dir = tmp_path / "vl_rec_model"
+    layout_dir.mkdir()
+    vl_rec_dir.mkdir()
+
+    (layout_dir / "model.pdiparams").write_text("dummy", encoding="utf-8")
+    (vl_rec_dir / "model.pdiparams").write_text("dummy", encoding="utf-8")
+
+    options = {
+        "layout_detection_model_dir": str(layout_dir),
+        "vl_rec_model_dir": str(vl_rec_dir),
+    }
+
+    status, ready = check_model_cache_status(options)
+    assert status == "READY_LOCAL_MODEL_DIRS"
+    assert ready is True
+
+
+def test_check_model_cache_status_missing_one_model_dir(tmp_path):
+    layout_dir = tmp_path / "layout_model"
+    layout_dir.mkdir()
+    (layout_dir / "model.pdiparams").write_text("dummy", encoding="utf-8")
+
+    options = {
+        "layout_detection_model_dir": str(layout_dir),
+    }
+
+    status, ready = check_model_cache_status(options)
+    assert status == "LOCAL_MODEL_DIRS_INVALID"
+    assert ready is False
+
+
+def test_check_model_cache_status_partial_default_cache(monkeypatch, tmp_path):
+    fake_home = tmp_path / "user_home"
+    paddle_cache = fake_home / ".paddleocr"
+    paddle_cache.mkdir(parents=True)
+    (paddle_cache / "model.pdiparams").write_text("dummy", encoding="utf-8")
+
+    monkeypatch.setattr("pathlib.Path.home", lambda: fake_home)
+
+    status, ready = check_model_cache_status({})
+    assert status == "MODEL_CACHE_PARTIALLY_VERIFIED"
+    assert ready is False
+
+
+def test_healthcheck_request_carries_parser_options(monkeypatch):
+    captured_request = []
+
+    class MockWorkerClient:
+        def execute_worker(self, request):
+            captured_request.append(request)
+            return MagicMock(
+                success=True,
+                health_data={
+                    "python_executable": "python.exe",
+                    "paddle_installed": True,
+                },
+            )
+
+    client = MockWorkerClient()
+    parser = PaddleOCRVLParser(worker_client=client)
     health = parser.healthcheck()
-    assert isinstance(health.healthy, bool)
-    assert health.parser_id == "paddleocr_vl"
+
+    assert health.healthy is True
+    assert len(captured_request) == 1
+    assert captured_request[0].operation == "healthcheck"
+    assert captured_request[0].options["pipeline_version"] == "v1.6"
+    assert captured_request[0].options["device"] == "cpu"

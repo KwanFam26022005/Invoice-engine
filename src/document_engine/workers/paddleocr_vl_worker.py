@@ -25,23 +25,47 @@ def get_runtime_versions() -> dict:
     return versions
 
 
-def check_model_cache_status() -> str:
+def check_model_cache_status(options: dict) -> tuple[str, bool]:
     """Inspect local PaddleOCR model cache readiness."""
+    layout_dir = options.get("layout_detection_model_dir")
+    vl_rec_dir = options.get("vl_rec_model_dir")
+
+    # 1. Explicit Local Model Dirs
+    if layout_dir or vl_rec_dir:
+        if not layout_dir or not vl_rec_dir:
+            return "LOCAL_MODEL_DIRS_INVALID", False
+
+        p_layout = Path(layout_dir)
+        p_vl = Path(vl_rec_dir)
+
+        if not (p_layout.is_dir() and p_vl.is_dir()):
+            return "LOCAL_MODEL_DIRS_INVALID", False
+
+        # Validate non-empty
+        try:
+            layout_has_files = any(p_layout.iterdir())
+            vl_has_files = any(p_vl.iterdir())
+        except Exception:
+            return "LOCAL_MODEL_DIRS_INVALID", False
+
+        if not (layout_has_files and vl_has_files):
+            return "LOCAL_MODEL_DIRS_INVALID", False
+
+        return "READY_LOCAL_MODEL_DIRS", True
+
+    # 2. Inspect runtime default cache locations (~/.paddleocr and ~/.paddlex/official_models)
     user_home = Path.home()
     paddle_cache = user_home / ".paddleocr"
-    if not paddle_cache.exists():
-        return "CACHE_MISSING"
+    paddlex_cache = user_home / ".paddlex" / "official_models"
 
-    params_files = list(paddle_cache.rglob("*.pdiparams"))
-    if not params_files:
-        return "CACHE_MISSING"
+    has_paddle_files = paddle_cache.exists() and any(paddle_cache.rglob("*.pdiparams"))
+    has_paddlex_files = paddlex_cache.exists() and any(paddlex_cache.rglob("*"))
 
-    # Check for structured subdirectories (e.g. layout, ocr, rec)
-    subdirs = [p for p in paddle_cache.iterdir() if p.is_dir()]
-    if len(params_files) >= 2 and len(subdirs) >= 1:
-        return "READY"
+    if has_paddle_files or has_paddlex_files:
+        # Default cache scan is partially verified and NOT model_cache_ready
+        return "MODEL_CACHE_PARTIALLY_VERIFIED", False
 
-    return "MODEL_CACHE_PARTIALLY_VERIFIED"
+    return "CACHE_MISSING", False
 
 
 def create_paddleocr_vl_pipeline(options: dict):
@@ -214,7 +238,7 @@ def main():
         input_path = req_data.get("input_path", "")
         doc_id = req_data.get("document_id", "doc_unknown")
         options = req_data.get("options", {})
-        allow_model_download = req_data.get("allow_model_download", False)
+        allow_model_download = req_data.get("allow_model_download", False) or os.getenv("ALLOW_MODEL_DOWNLOAD") == "1"
 
         runtime_versions = get_runtime_versions()
 
@@ -229,12 +253,8 @@ def main():
             except Exception:
                 symbol_importable = False
 
-        cache_status = check_model_cache_status()
-        model_cache_ready = (
-            cache_status in ("READY", "MODEL_CACHE_PARTIALLY_VERIFIED")
-            or allow_model_download
-            or os.getenv("ALLOW_MODEL_DOWNLOAD") == "1"
-        )
+        cache_status, explicit_ready = check_model_cache_status(options)
+        model_cache_ready = explicit_ready or allow_model_download
         runtime_ready = has_paddle and has_paddleocr and symbol_importable
 
         # Handle healthcheck operation
@@ -269,12 +289,13 @@ def main():
                 "actual_parser_version": "3.0.0",
                 "runtime_versions": runtime_versions,
                 "error_type": "PARSER_UNAVAILABLE",
-                "error_message": "Paddle / PaddleOCR dependency not installed or PaddleOCRVL symbol importable in worker environment.",
+                "error_message": "Paddle / PaddleOCR dependency not installed or PaddleOCRVL symbol not importable in worker environment.",
             }
             print(json.dumps(resp), flush=True)
             return
 
-        if not model_cache_ready and cache_status == "CACHE_MISSING":
+        # Do NOT instantiate model if allow_model_download is False and cache is not ready
+        if not model_cache_ready:
             resp = {
                 "request_id": req_id,
                 "success": False,
@@ -282,7 +303,7 @@ def main():
                 "actual_parser_version": "3.0.0",
                 "runtime_versions": runtime_versions,
                 "error_type": "PARSER_UNAVAILABLE",
-                "error_message": "PaddleOCR required model artifacts (.pdiparams) not found in cache and ALLOW_MODEL_DOWNLOAD is not set.",
+                "error_message": f"PaddleOCR-VL model cache unready (status: {cache_status}) and ALLOW_MODEL_DOWNLOAD is not set.",
             }
             print(json.dumps(resp), flush=True)
             return
