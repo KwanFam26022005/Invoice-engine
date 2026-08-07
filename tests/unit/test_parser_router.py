@@ -131,7 +131,7 @@ def test_route_native_pdf_to_pymupdf(tmp_path: Path):
     router = ParserRouter(registry=registry)
     outcome = router.route_and_parse(source_doc, profile)
 
-    assert outcome.routing_decision.selected_parser == "pymupdf_native"
+    assert outcome.routing_decision.requested_parser == "pymupdf_native"
     assert outcome.selected_result.success is True
     assert outcome.selected_result.document_ir is not None
     norm_text = unicodedata.normalize("NFC", outcome.selected_result.document_ir.full_text)

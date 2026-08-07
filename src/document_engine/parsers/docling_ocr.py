@@ -1,27 +1,22 @@
-"""Docling OCR parser adapter for scanned & image-only PDFs using EasyOCR (vi, en)."""
+"""Docling OCR parser adapter for scanned & image-only PDFs via isolated worker."""
 
 import time
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from document_engine.core.models import PDFProfileType
 from document_engine.ir.models import (
-    BlockIR,
-    DocumentIR,
     DocumentParseResult,
     DocumentProfile,
-    PageIR,
-    ParseWarning,
-    ParserProvenance,
     SourceDocument,
-    generate_block_id,
-    generate_page_id,
 )
 from document_engine.parsers.base import DocumentParser, ParserHealth, ParserSpec
+from document_engine.parsers.docling_native import dict_to_document_ir
+from document_engine.runtime import WorkerClient, WorkerRequest, resolve_worker_python
 
 
 class DoclingOCRParser(DocumentParser):
-    def __init__(self):
+    def __init__(self, worker_client: Optional[WorkerClient] = None):
         self._spec = ParserSpec(
             parser_id="docling_ocr",
             name="Docling OCR Parser (EasyOCR vi/en)",
@@ -40,7 +35,7 @@ class DoclingOCRParser(DocumentParser):
                 "do_table_structure": True,
             },
         )
-        self._converter = None
+        self.worker_client = worker_client or WorkerClient()
 
     @property
     def spec(self) -> ParserSpec:
@@ -49,16 +44,21 @@ class DoclingOCRParser(DocumentParser):
     def healthcheck(self) -> ParserHealth:
         import importlib.util
 
-        has_docling = importlib.util.find_spec("docling") is not None
-        has_easyocr = importlib.util.find_spec("easyocr") is not None
-        if has_docling and has_easyocr:
+        has_docling_in_base = (
+            importlib.util.find_spec("docling") is not None
+            and importlib.util.find_spec("easyocr") is not None
+        )
+        python_bin = resolve_worker_python(self.parser_id)
+        is_isolated = python_bin != Path(python_bin).name
+
+        if has_docling_in_base or is_isolated:
             return ParserHealth(
-                parser_id=self.parser_id, healthy=True, message="Docling & EasyOCR available"
+                parser_id=self.parser_id, healthy=True, message="Docling OCR available"
             )
         return ParserHealth(
             parser_id=self.parser_id,
             healthy=False,
-            message="Missing dependencies for Docling OCR",
+            message="Missing dependencies for Docling OCR in base and worker environments",
             dependencies_available=False,
         )
 
@@ -69,26 +69,6 @@ class DoclingOCRParser(DocumentParser):
             PDFProfileType.NATIVE_PDF,
         )
 
-    def prepare(self) -> None:
-        if self._converter is None:
-            try:
-                from docling.document_converter import DocumentConverter, PdfFormatOption
-                from docling.datamodel.pipeline_options import EasyOcrOptions, PdfPipelineOptions
-
-                ocr_options = EasyOcrOptions(lang=["vi", "en"])
-                pipeline_options = PdfPipelineOptions()
-                pipeline_options.do_ocr = True
-                pipeline_options.ocr_options = ocr_options
-                pipeline_options.do_table_structure = True
-
-                self._converter = DocumentConverter(
-                    format_options={
-                        "pdf": PdfFormatOption(pipeline_options=pipeline_options)
-                    }
-                )
-            except Exception:
-                self._converter = None
-
     def parse(self, document: SourceDocument, profile: DocumentProfile) -> DocumentParseResult:
         health = self.healthcheck()
         if not health.healthy:
@@ -97,7 +77,6 @@ class DoclingOCRParser(DocumentParser):
                 error_message=f"Docling OCR unavailable: {health.message}",
             )
 
-        start_time = time.time()
         pdf_path = Path(document.path)
         if not pdf_path.exists():
             return DocumentParseResult(
@@ -105,58 +84,24 @@ class DoclingOCRParser(DocumentParser):
             )
 
         try:
-            if self._converter is None:
-                self.prepare()
-            if self._converter is None:
-                return DocumentParseResult(
-                    success=False, error_message="Docling OCR converter initialization failed."
-                )
-
-            result = self._converter.convert(str(pdf_path))
-            docling_doc = result.document
-            markdown_text = docling_doc.export_to_markdown()
-
-            pages: List[PageIR] = []
-            warnings: List[ParseWarning] = []
-
-            for page_idx in range(document.page_count):
-                page_num = page_idx + 1
-                page_id = generate_page_id(document.document_id, page_num)
-                block = BlockIR(
-                    block_id=generate_block_id(page_id, 0),
-                    page_number=page_num,
-                    text=f"OCR Page {page_num} content",
-                )
-                pages.append(
-                    PageIR(
-                        page_id=page_id,
-                        page_number=page_num,
-                        width=595.0,
-                        height=842.0,
-                        blocks=[block],
-                        tables=[],
-                        text_content=markdown_text,
-                    )
-                )
-
-            elapsed = time.time() - start_time
-            provenance = ParserProvenance(
+            request = WorkerRequest(
+                request_id=f"req_{document.document_id}_docling_ocr",
                 parser_id=self.parser_id,
-                parser_version=self.spec.version,
-                execution_time_seconds=elapsed,
-                config=self.spec.config,
-            )
-
-            doc_ir = DocumentIR(
+                input_path=str(pdf_path),
                 document_id=document.document_id,
-                source_document=document,
-                profile=profile,
-                provenance=provenance,
-                pages=pages,
-                full_text=markdown_text,
-                warnings=warnings,
+                page_count=document.page_count,
+                options=self.spec.config,
             )
 
+            resp = self.worker_client.execute_worker(request)
+
+            if not resp.success or not resp.document_ir_dict:
+                return DocumentParseResult(
+                    success=False,
+                    error_message=resp.error_message or "Docling OCR worker failed",
+                )
+
+            doc_ir = dict_to_document_ir(resp.document_ir_dict, profile)
             return DocumentParseResult(success=True, document_ir=doc_ir)
 
         except Exception as e:
