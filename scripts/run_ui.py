@@ -49,7 +49,7 @@ def main():
                 st.info(f"Found {len(pdfs)} PDF files in directory.")
                 if st.button("Process All Documents"):
                     with st.spinner("Processing batch..."):
-                        summary, results = pipeline.process_folder(path_obj)
+                        summary, _results = pipeline.process_folder(path_obj)
                         st.success("Batch completed!")
                         st.json(summary.model_dump())
         else:
@@ -106,11 +106,10 @@ def main():
             field_name = st.text_input("Field Name to Correct (e.g. document_number):")
             new_val = st.text_input("New Corrected Value:")
 
-            if st.button("Apply Correction"):
-                if field_name and new_val:
-                    corr = review_mgr.apply_correction(target_doc_id, field_name, new_val)
-                    st.success(f"Correction saved! ID: {corr.correction_id}")
-                    st.rerun()
+            if st.button("Apply Correction") and field_name and new_val:
+                corr = review_mgr.apply_correction(target_doc_id, field_name, new_val)
+                st.success(f"Correction saved! ID: {corr.correction_id}")
+                st.rerun()
         else:
             st.success("Review queue is clean!")
 

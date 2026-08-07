@@ -117,7 +117,7 @@ class DocumentMapper:
         self, document_ir: DocumentIR
     ) -> Tuple[Optional[str], List[EvidenceReference]]:
         text = document_ir.full_text
-        val, status, _ = parse_date(text)
+        val, _status, _ = parse_date(text)
         if val:
             ev = EvidenceReference(
                 document_id=document_ir.document_id,
@@ -158,7 +158,7 @@ class DocumentMapper:
             re.IGNORECASE,
         )
         if m:
-            val, status, _ = parse_decimal(m.group(1))
+            val, _status, _ = parse_decimal(m.group(1))
             if val is not None:
                 ev = EvidenceReference(
                     document_id=document_ir.document_id,

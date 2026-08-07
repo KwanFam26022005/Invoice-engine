@@ -1,7 +1,7 @@
 """Canonical Business Document Schemas using Pydantic discriminated unions and Decimal precision."""
 
 from decimal import Decimal
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 from document_engine.core.models import DocumentFamilyType, SourceFormatType
@@ -205,16 +205,16 @@ class UnknownBusinessDocumentPayload(BaseModel):
     review_notes: List[str] = Field(default_factory=list)
 
 
-CanonicalPayload = Union[
-    SalesInvoicePayload,
-    UtilityConsumptionInvoicePayload,
-    ServiceVolumeInvoicePayload,
-    PortServiceInvoicePayload,
-    ReceiptPayload,
-    TaxWithholdingCertificatePayload,
-    SupportingStatementPayload,
-    UnknownBusinessDocumentPayload,
-]
+CanonicalPayload = (
+    SalesInvoicePayload
+    | UtilityConsumptionInvoicePayload
+    | ServiceVolumeInvoicePayload
+    | PortServiceInvoicePayload
+    | ReceiptPayload
+    | TaxWithholdingCertificatePayload
+    | SupportingStatementPayload
+    | UnknownBusinessDocumentPayload
+)
 
 
 class BusinessDocumentEnvelope(BaseModel):

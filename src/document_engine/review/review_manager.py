@@ -128,6 +128,6 @@ class ReviewManager:
                 conn.execute("COMMIT;")
                 return corr
 
-            except Exception as e:
+            except Exception:
                 conn.execute("ROLLBACK;")
-                raise e
+                raise

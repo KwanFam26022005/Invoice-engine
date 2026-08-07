@@ -116,12 +116,11 @@ class ParserRouter:
         if not doc_ir.full_text or not doc_ir.full_text.strip():
             return True
 
-        if profile.pdf_profile == PDFProfileType.SCAN_PDF and not profile.has_text_layer:
-            # If native parser was ran on a scan PDF and extracted no real content
-            if len(doc_ir.full_text.strip()) < 10:
-                return True
-
-        return False
+        return (
+            profile.pdf_profile == PDFProfileType.SCAN_PDF
+            and not profile.has_text_layer
+            and len(doc_ir.full_text.strip()) < 10
+        )
 
     def _get_available_parser(self, parser_id: str) -> DocumentParser:
         try:

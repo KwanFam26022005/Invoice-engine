@@ -82,7 +82,7 @@ def main(args: Optional[list] = None) -> None:
 
     elif parsed.command == "process-folder":
         pipeline = DocumentPipeline()
-        summary, results = pipeline.process_folder(Path(parsed.folder))
+        summary, _results = pipeline.process_folder(Path(parsed.folder))
         print(f"Received        : {summary.received}")
         print(f"Processed       : {summary.processed}")
         print(f"Accepted        : {summary.accepted}")

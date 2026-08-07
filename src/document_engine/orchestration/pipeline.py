@@ -98,7 +98,7 @@ class DocumentPipeline:
         self, folder_path: Path, run_id: Optional[str] = None
     ) -> tuple[ProcessingSummary, List[PipelineResult]]:
         folder_path = Path(folder_path).resolve()
-        pdf_files = sorted(list(folder_path.glob("*.pdf")))
+        pdf_files = sorted(folder_path.glob("*.pdf"))
 
         summary = ProcessingSummary(received=len(pdf_files))
         results: List[PipelineResult] = []

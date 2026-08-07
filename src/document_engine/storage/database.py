@@ -261,6 +261,6 @@ class DuckDBStorage:
                     )
 
                 conn.execute("COMMIT;")
-            except Exception as e:
+            except Exception:
                 conn.execute("ROLLBACK;")
-                raise e
+                raise

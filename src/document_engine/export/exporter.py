@@ -15,9 +15,8 @@ class ExcelExporter:
 
     def sanitize_cell_value(self, val: Any) -> Any:
         """Sanitize string values starting with '=', '+', '-', '@' against formula injection."""
-        if isinstance(val, str):
-            if val.startswith(("=", "+", "-", "@")):
-                return f"'{val}"
+        if isinstance(val, str) and val.startswith(("=", "+", "-", "@")):
+            return f"'{val}"
         return val
 
     def export_run(self, run_id: str, output_path: Path) -> Path:
