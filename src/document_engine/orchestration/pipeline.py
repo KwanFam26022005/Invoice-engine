@@ -1,5 +1,6 @@
-"""End-to-end document processing pipeline with two-level execution and semantic fallback."""
+"""End-to-end document processing pipeline with two-level execution, semantic fallback, and parser disagreement policy."""
 
+from decimal import Decimal
 from pathlib import Path
 from typing import List, Optional
 from pydantic import BaseModel
@@ -44,6 +45,31 @@ class DocumentPipeline:
         self.validator = BusinessValidator(tolerance=self.config.validation_tolerance)
         self.storage = DuckDBStorage(self.paths.database_file)
 
+    def _check_parser_disagreement(
+        self, primary_env: BusinessDocumentEnvelope, fallback_env: BusinessDocumentEnvelope
+    ) -> bool:
+        """Check if primary and fallback envelopes conflict on critical fields."""
+        p_c = getattr(primary_env.payload, "common", None)
+        f_c = getattr(fallback_env.payload, "common", None)
+
+        if p_c and f_c:
+            if p_c.document_number and f_c.document_number and p_c.document_number != f_c.document_number:
+                return True
+            if p_c.issue_date and f_c.issue_date and p_c.issue_date != f_c.issue_date:
+                return True
+            if p_c.grand_total is not None and f_c.grand_total is not None and abs(p_c.grand_total - f_c.grand_total) > Decimal("0.01"):
+                return True
+
+            p_seller = p_c.seller.tax_id if p_c.seller else None
+            f_seller = f_c.seller.tax_id if f_c.seller else None
+            if p_seller and f_seller and p_seller != f_seller:
+                return True
+
+        # Check Tax Certificate withheld_tax if applicable
+        p_tax = getattr(primary_env.payload, "withheld_tax", None)
+        f_tax = getattr(fallback_env.payload, "withheld_tax", None)
+        return bool(p_tax is not None and f_tax is not None and abs(p_tax - f_tax) > Decimal("0.01"))
+
     def process_file(self, pdf_path: Path, run_id: Optional[str] = None) -> PipelineResult:
         pdf_path = Path(pdf_path).resolve()
         if run_id is None:
@@ -71,27 +97,43 @@ class DocumentPipeline:
 
         doc_ir = parse_res.document_ir
 
-        # Level 2: Business Interpretation
+        # Level 2: Business Interpretation (Primary)
         classification = self.classifier.classify(doc_ir)
         envelope = self.mapper.map_to_envelope(doc_ir, classification)
         validation_res = self.validator.validate(envelope)
         completeness = self.mapper.evaluate_completeness(envelope, doc_ir)
 
-        # Semantic Fallback Loop: check if completeness or critical missing fields trigger semantic fallback
+        parser_disagreement = False
+
+        # Semantic Fallback Loop
         if (
             completeness.requires_review
             and outcome.fallback_result is not None
             and outcome.fallback_result.success
             and outcome.fallback_result.document_ir
         ):
-            # Try interpreting fallback DocumentIR
             fb_ir = outcome.fallback_result.document_ir
             fb_class = self.classifier.classify(fb_ir)
             fb_env = self.mapper.map_to_envelope(fb_ir, fb_class)
             fb_val = self.validator.validate(fb_env)
             fb_comp = self.mapper.evaluate_completeness(fb_env, fb_ir)
 
-            if fb_comp.completeness_score > completeness.completeness_score:
+            # Preserve scores before selection
+            primary_score = completeness.completeness_score
+            fallback_score = fb_comp.completeness_score
+
+            # Store signals
+            outcome.routing_decision.profile_signals["primary_family"] = classification.document_family.value
+            outcome.routing_decision.profile_signals["fallback_family"] = fb_class.document_family.value
+            outcome.routing_decision.profile_signals["primary_completeness_score"] = primary_score
+            outcome.routing_decision.profile_signals["fallback_completeness_score"] = fallback_score
+
+            # Check parser disagreement
+            parser_disagreement = self._check_parser_disagreement(envelope, fb_env)
+            if parser_disagreement:
+                outcome.routing_decision.profile_signals["parser_disagreement"] = True
+
+            if fallback_score > primary_score:
                 doc_ir = fb_ir
                 classification = fb_class
                 envelope = fb_env
@@ -99,20 +141,24 @@ class DocumentPipeline:
                 completeness = fb_comp
                 outcome.routing_decision.selection_reason = (
                     "Selected fallback parser result due to higher semantic completeness score "
-                    f"({fb_comp.completeness_score:.2f} vs {completeness.completeness_score:.2f})."
+                    f"({fallback_score:.2f} vs {primary_score:.2f})."
                 )
 
-        # Store in DuckDB Storage V2
+        # Store in DuckDB Storage
         self.storage.store_document(
             envelope=envelope,
             validation=validation_res,
             routing_decision=outcome.routing_decision,
+            routing_outcome=outcome,
             completeness=completeness,
+            source_doc=source_doc,
             run_id=run_id,
         )
 
         requires_review = (
-            validation_res.requires_review or completeness.requires_review
+            validation_res.requires_review
+            or completeness.requires_review
+            or parser_disagreement
         )
         val_status = "accepted" if validation_res.is_valid and not requires_review else "review_required"
 
@@ -136,6 +182,11 @@ class DocumentPipeline:
         folder_path = Path(folder_path).resolve()
         pdf_files = sorted(folder_path.glob("*.pdf"))
 
+        if run_id is None:
+            run_id = generate_run_id()
+
+        self.storage.start_processing_run(run_id, total_documents=len(pdf_files))
+
         summary = ProcessingSummary(received=len(pdf_files))
         results: List[PipelineResult] = []
 
@@ -155,5 +206,15 @@ class DocumentPipeline:
 
             except Exception:
                 summary.failed += 1
+
+            # Update batch run progress in storage
+            self.storage.update_processing_run(
+                run_id=run_id,
+                processed_count=summary.processed,
+                accepted_count=summary.accepted,
+                review_required_count=summary.review_required,
+                failed_count=summary.failed,
+                status="running" if summary.processed < summary.received else "completed",
+            )
 
         return summary, results
