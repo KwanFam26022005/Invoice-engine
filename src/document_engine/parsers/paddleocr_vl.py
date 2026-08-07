@@ -1,27 +1,22 @@
-"""PaddleOCR-VL fallback parser adapter for difficult, irregular, or failed layout documents."""
+"""PaddleOCR-VL fallback parser adapter for difficult, irregular, or failed layout documents via isolated worker."""
 
-import time
+import os
 from pathlib import Path
-from typing import List
+from typing import Optional
 
 from document_engine.core.models import PDFProfileType
 from document_engine.ir.models import (
-    BlockIR,
-    DocumentIR,
     DocumentParseResult,
     DocumentProfile,
-    PageIR,
-    ParseWarning,
-    ParserProvenance,
     SourceDocument,
-    generate_block_id,
-    generate_page_id,
 )
 from document_engine.parsers.base import DocumentParser, ParserHealth, ParserSpec
+from document_engine.parsers.docling_native import dict_to_document_ir
+from document_engine.runtime import WorkerClient, WorkerRequest, resolve_worker_python
 
 
 class PaddleOCRVLParser(DocumentParser):
-    def __init__(self):
+    def __init__(self, worker_client: Optional[WorkerClient] = None):
         self._spec = ParserSpec(
             parser_id="paddleocr_vl",
             name="PaddleOCR-VL Fallback Parser",
@@ -33,9 +28,14 @@ class PaddleOCRVLParser(DocumentParser):
             ],
             requires_gpu=False,
             is_fallback=True,
-            config={"mode": "local_fallback", "model_version": "v1.6_cpu"},
+            config={
+                "mode": "local_fallback",
+                "pipeline_version": "v1.6",
+                "use_gpu": False,
+                "layout": True,
+            },
         )
-        self._engine = None
+        self.worker_client = worker_client or WorkerClient()
 
     @property
     def spec(self) -> ParserSpec:
@@ -44,16 +44,35 @@ class PaddleOCRVLParser(DocumentParser):
     def healthcheck(self) -> ParserHealth:
         import importlib.util
 
-        has_paddle = importlib.util.find_spec("paddle") is not None
-        has_paddleocr = importlib.util.find_spec("paddleocr") is not None
-        if has_paddle and has_paddleocr:
+        has_paddle_in_base = (
+            importlib.util.find_spec("paddle") is not None
+            and importlib.util.find_spec("paddleocr") is not None
+        )
+        python_bin = resolve_worker_python(self.parser_id)
+        is_isolated = python_bin != Path(python_bin).name
+
+        if has_paddle_in_base or is_isolated:
+            # Check offline model policy
+            allow_dl = os.getenv("ALLOW_MODEL_DOWNLOAD") == "1"
+            user_home = Path.home()
+            paddle_dir = user_home / ".paddleocr"
+            if not paddle_dir.exists() and not allow_dl:
+                return ParserHealth(
+                    parser_id=self.parser_id,
+                    healthy=False,
+                    message="PaddleOCR-VL model cache missing and ALLOW_MODEL_DOWNLOAD is not set",
+                    dependencies_available=True,
+                )
             return ParserHealth(
-                parser_id=self.parser_id, healthy=True, message="PaddleOCR 3.x environment available"
+                parser_id=self.parser_id,
+                healthy=True,
+                message="PaddleOCR-VL fallback pipeline available",
             )
+
         return ParserHealth(
             parser_id=self.parser_id,
             healthy=False,
-            message="PaddleOCR fallback dependencies not installed",
+            message="PaddleOCR-VL fallback dependencies not installed",
             dependencies_available=False,
         )
 
@@ -68,7 +87,6 @@ class PaddleOCRVLParser(DocumentParser):
                 error_message=f"PaddleOCR-VL fallback unavailable: {health.message}",
             )
 
-        start_time = time.time()
         pdf_path = Path(document.path)
         if not pdf_path.exists():
             return DocumentParseResult(
@@ -76,54 +94,28 @@ class PaddleOCRVLParser(DocumentParser):
             )
 
         try:
-            # Fallback local extraction implementation
-            elapsed = time.time() - start_time
-            provenance = ParserProvenance(
+            request = WorkerRequest(
+                request_id=f"req_{document.document_id}_paddleocr_vl",
                 parser_id=self.parser_id,
-                parser_version=self.spec.version,
-                execution_time_seconds=elapsed,
-                config=self.spec.config,
-            )
-
-            warnings = [
-                ParseWarning(
-                    code="FALLBACK_PARSER_EXECUTED",
-                    message="PaddleOCR-VL fallback parser was triggered.",
-                )
-            ]
-
-            pages: List[PageIR] = []
-            for page_idx in range(document.page_count):
-                page_num = page_idx + 1
-                page_id = generate_page_id(document.document_id, page_num)
-                block = BlockIR(
-                    block_id=generate_block_id(page_id, 0),
-                    page_number=page_num,
-                    text=f"PaddleOCR-VL Fallback Page {page_num} text",
-                )
-                pages.append(
-                    PageIR(
-                        page_id=page_id,
-                        page_number=page_num,
-                        width=595.0,
-                        height=842.0,
-                        blocks=[block],
-                        tables=[],
-                        text_content=f"PaddleOCR-VL Fallback Page {page_num} text",
-                    )
-                )
-
-            doc_ir = DocumentIR(
+                input_path=str(pdf_path),
                 document_id=document.document_id,
-                source_document=document,
-                profile=profile,
-                provenance=provenance,
-                pages=pages,
-                full_text="\n".join(p.text_content for p in pages),
-                warnings=warnings,
+                page_count=document.page_count,
+                options=self.spec.config,
+                allow_model_download=os.getenv("ALLOW_MODEL_DOWNLOAD") == "1",
             )
 
-            return DocumentParseResult(success=True, document_ir=doc_ir, warnings=warnings)
+            resp = self.worker_client.execute_worker(request)
+
+            if not resp.success or not resp.document_ir_dict:
+                return DocumentParseResult(
+                    success=False,
+                    error_message=resp.error_message or "PaddleOCR-VL worker failed",
+                )
+
+            doc_ir = dict_to_document_ir(resp.document_ir_dict, profile)
+            return DocumentParseResult(
+                success=True, document_ir=doc_ir, warnings=doc_ir.warnings
+            )
 
         except Exception as e:
             return DocumentParseResult(
