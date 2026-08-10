@@ -1,0 +1,15 @@
+policy_version: "1.0"
+fallback_path: a_deterministic
+
+# Frozen CPU evidence from the controlled current-pilot canary.
+cpu_canary_allowed: false
+cpu_production_allowed: false
+cpu_timeout_budgets_seconds:
+  - 180.0
+  - 600.0
+cpu_blocking_stage: extraction_started
+
+# Accelerator execution remains canary-only until semantic + grounding acceptance.
+cuda_canary_allowed: true
+cuda_production_requires_acceptance: true
+semantic_canary_accepted: false
