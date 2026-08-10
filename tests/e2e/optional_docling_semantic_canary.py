@@ -7,8 +7,15 @@ import fitz
 import pytest
 
 from document_engine.core.models import DocumentFamilyType, PDFProfileType
-from document_engine.ir.models import DocumentIR, DocumentProfile, PageIR, ParserProvenance, SourceDocument
-from document_engine.semantic import SemanticExtractionRequest
+from document_engine.ir.models import (
+    BlockIR,
+    DocumentIR,
+    DocumentProfile,
+    PageIR,
+    ParserProvenance,
+    SourceDocument,
+)
+from document_engine.semantic import EvidenceGrounder, SemanticExtractionRequest
 from document_engine.semantic.extractors import DoclingSemanticExtractor
 
 
@@ -44,7 +51,24 @@ def test_docling_semantic_real_synthetic_canary(tmp_path: Path):
             has_text_layer=True,
         ),
         provenance=ParserProvenance(parser_id="synthetic", parser_version="1"),
-        pages=[PageIR(page_id="doc_semantic_canary_p0001", page_number=1)],
+        pages=[
+            PageIR(
+                page_id="doc_semantic_canary_p0001",
+                page_number=1,
+                blocks=[
+                    BlockIR(
+                        block_id="b-number",
+                        page_number=1,
+                        text="Invoice No: INV-SYNTH-001",
+                    ),
+                    BlockIR(
+                        block_id="b-total",
+                        page_number=1,
+                        text="Grand total: 1250000 VND",
+                    ),
+                ],
+            )
+        ],
     )
     request = SemanticExtractionRequest(
         document_id=source.document_id,
@@ -53,9 +77,17 @@ def test_docling_semantic_real_synthetic_canary(tmp_path: Path):
         document_ir=document_ir,
     )
 
-    extractor = DoclingSemanticExtractor(timeout=300.0)
+    # CPU inference of a 2B VLM can take several minutes; keep this timeout
+    # confined to the explicit opt-in canary rather than the production default.
+    extractor = DoclingSemanticExtractor(timeout=900.0)
     health = extractor.healthcheck()
     assert health.success, health.error_type
+    assert health.health_data is not None
+    assert health.health_data.get("offline_runtime_ready") is True
+
     result = extractor.extract(request)
     assert result.success, result.error_code
-    assert isinstance(result.candidates, list)
+    assert result.candidates
+
+    grounding = EvidenceGrounder().ground_result(result, document_ir)
+    assert grounding.grounded_count >= 1
