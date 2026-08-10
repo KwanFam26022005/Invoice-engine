@@ -1,0 +1,21 @@
+contract_version: "1.0"
+
+# A — frozen deterministic classifier/mapper baseline from R3.
+baseline_revision: "2eb4b3f7695ef6693369d732a8520fe243269d7a"
+
+# B — Docling schema-conditioned semantic path after local CPU/offline readiness work.
+docling_semantic_revision: "87c55aff8ac4bdf03ddceab7176344eccb608ea3"
+
+# C — PaddleOCR-VL visual/layout path at the revision that passed the real synthetic canary.
+paddle_visual_revision: "b02ba775d279802fb92382ed9f564d86c016c152"
+
+# Fairness / safety rules.
+allow_oracle_family: false
+allow_holdout_tuning: false
+require_independent_paths: true
+manual_heavy_execution_only: true
+
+# Docling semantic must be conditioned by the frozen runtime classifier output,
+# never by the expected/audited family from the private manifest.
+schema_condition_source: "frozen_classifier_output"
+unknown_family_semantic_policy: "abstain"

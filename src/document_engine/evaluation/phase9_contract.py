@@ -6,7 +6,7 @@ semantic engine canary is compared with the frozen R3 baseline.
 """
 
 from enum import Enum
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 from typing import List, Optional
 
@@ -48,7 +48,7 @@ class Phase9DocumentManifestEntry(BaseModel):
     layout_group: str = Field(min_length=1)
     source_ref: str = Field(
         min_length=1,
-        description="Opaque or workspace-relative source reference; never an absolute private path.",
+        description="Opaque workspace-relative source reference; never an absolute private path.",
     )
     audit_ref: str = Field(
         min_length=1,
@@ -59,8 +59,13 @@ class Phase9DocumentManifestEntry(BaseModel):
     @classmethod
     def validate_private_relative_ref(cls, value: str) -> str:
         if Path(value).is_absolute() or re.match(r"^[A-Za-z]:[\\/]", value):
-            raise ValueError("Phase 9 private references must not use absolute paths.")
-        return value
+            raise ValueError("Phase 9 private references must use workspace-relative paths.")
+
+        normalized = value.replace("\\", "/")
+        parts = PurePosixPath(normalized).parts
+        if ".." in parts or not parts or parts[0] != "workspace":
+            raise ValueError("Phase 9 private references must use workspace-relative paths.")
+        return normalized
 
 
 class Phase9Manifest(BaseModel):
