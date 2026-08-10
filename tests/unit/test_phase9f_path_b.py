@@ -163,6 +163,7 @@ def test_path_b_execution_never_uses_manifest_family_as_schema_oracle(tmp_path: 
     assert metadata["oracle_family_used_for_execution"] is False
     assert metadata["audit_loaded_after_inference"] is True
     assert metadata["private_values_returned"] is False
+    assert metadata["semantic_timeout_seconds"] is None
 
 
 def test_path_b_real_extractor_requires_manual_terminal_gate(tmp_path: Path):
@@ -177,3 +178,44 @@ def test_path_b_real_extractor_requires_manual_terminal_gate(tmp_path: Path):
         assert str(exc) == "MANUAL_TERMINAL_TASK_REQUIRED"
     else:
         raise AssertionError("Real Path B execution must require the manual terminal gate.")
+
+
+def test_path_b_real_extractor_receives_configured_timeout(tmp_path: Path, monkeypatch):
+    _write_manifest(tmp_path, manifest_family=DocumentFamilyType.TAX_WITHHOLDING_CERTIFICATE)
+    captured = {}
+
+    class _ConfiguredFakeExtractor(_FakeSemanticExtractor):
+        def __init__(self, timeout: float):
+            super().__init__()
+            captured["timeout"] = timeout
+
+    monkeypatch.setattr(
+        "document_engine.semantic.extractors.docling_semantic.DoclingSemanticExtractor",
+        _ConfiguredFakeExtractor,
+    )
+
+    _observation, metadata = execute_phase9f_path_b_observation(
+        alias="current_tax_001",
+        repo_root=tmp_path,
+        allow_heavy_execution=True,
+        semantic_timeout_seconds=600.0,
+    )
+
+    assert captured["timeout"] == 600.0
+    assert metadata["semantic_timeout_seconds"] == 600.0
+
+
+def test_path_b_rejects_non_positive_timeout(tmp_path: Path):
+    _write_manifest(tmp_path, manifest_family=DocumentFamilyType.TAX_WITHHOLDING_CERTIFICATE)
+
+    try:
+        execute_phase9f_path_b_observation(
+            alias="current_tax_001",
+            repo_root=tmp_path,
+            extractor=_FakeSemanticExtractor(),
+            semantic_timeout_seconds=0,
+        )
+    except ValueError as exc:
+        assert "greater than zero" in str(exc)
+    else:
+        raise AssertionError("Path B must reject a non-positive semantic timeout.")
