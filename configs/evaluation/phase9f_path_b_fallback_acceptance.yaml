@@ -1,0 +1,33 @@
+acceptance_version: "1.0"
+source_phase: "9F.2B.5"
+alias: current_tax_001
+
+# Routing acceptance is frozen independently from extraction quality.
+runtime_verdict: CPU_EXECUTION_SUITABILITY_BLOCKED
+reason_code: CPU_EXTRACTION_TIMEOUT_CONFIRMED
+selected_path: a_deterministic
+fallback_path: a_deterministic
+path_b_inference_executed: false
+path_a_executed: true
+fallback_verified: true
+routing_accepted: true
+fallback_execution_accepted: true
+
+# Privacy-safe Path A observation from the controlled fallback verification.
+predicted_family: tax_withholding_certificate
+family_match: true
+confirmed_field_count: 13
+predicted_field_count: 7
+normalized_match_count: 2
+validation_pass: false
+review_required: true
+selected_parser: pymupdf_native
+
+# Quality is not auto-accepted from successful routing.
+fallback_quality_disposition: REVIEW_REQUIRED
+fallback_quality_accepted: false
+semantic_path_b_quality_evaluable: false
+semantic_path_b_quality_accepted: false
+holdout_authorized: false
+generalization_claim_authorized: false
+private_values_persisted: false
