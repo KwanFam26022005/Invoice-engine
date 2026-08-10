@@ -7,9 +7,17 @@ import json
 from pathlib import Path
 import sys
 
+from document_engine.evaluation.phase9f import Phase9EvaluationPath
 from document_engine.evaluation.phase9f_path_b import (
     execute_phase9f_path_b_observation,
     probe_phase9f_path_b_alias,
+)
+from document_engine.evaluation.phase9f_runtime_policy import (
+    PathBRuntimePurpose,
+    Phase9FPathBRuntimePolicyConfig,
+    decide_path_b_runtime,
+    evidence_from_healthcheck,
+    select_path_for_runtime,
 )
 from document_engine.runtime.worker_errors import WorkerTimeoutError
 
@@ -28,6 +36,11 @@ def _parser() -> argparse.ArgumentParser:
         default="workspace/phase9f/path_b_current_pilot_dry_run.json",
     )
     parser.add_argument(
+        "--runtime-policy",
+        default="configs/evaluation/phase9f_path_b_runtime_policy.yaml",
+        help="Tracked Path B runtime suitability policy.",
+    )
+    parser.add_argument(
         "--timeout-seconds",
         type=float,
         default=180.0,
@@ -36,7 +49,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--execute",
         action="store_true",
-        help="Explicitly permit the real local Docling/NuExtract model call.",
+        help="Explicitly permit the real local Docling/NuExtract model call when runtime policy allows it.",
     )
     return parser
 
@@ -57,6 +70,35 @@ def _print_eligibility(report) -> None:
         "eligible",
     ):
         print(f"{key}={data[key]}")
+
+
+def _load_runtime_policy(repo_root: Path, relative_path: str) -> Phase9FPathBRuntimePolicyConfig:
+    policy_path = (repo_root / relative_path).resolve()
+    if policy_path != repo_root and repo_root not in policy_path.parents:
+        raise ValueError("Phase 9F runtime policy escaped repository root.")
+    if not policy_path.is_file():
+        raise FileNotFoundError("Phase 9F Path B runtime policy is unavailable.")
+    return Phase9FPathBRuntimePolicyConfig.load_yaml(policy_path)
+
+
+def _evaluate_runtime_policy(repo_root: Path, args):
+    policy = _load_runtime_policy(repo_root, args.runtime_policy)
+
+    # Healthcheck is structure/runtime-only and does not load the semantic model.
+    from document_engine.semantic.extractors.docling_semantic import DoclingSemanticExtractor
+
+    health_timeout = max(30.0, min(float(args.timeout_seconds), 60.0))
+    response = DoclingSemanticExtractor(timeout=health_timeout).healthcheck()
+    response_dict = response.model_dump(mode="json")
+    evidence = evidence_from_healthcheck(
+        response_dict,
+        timed_out_budgets_seconds=policy.cpu_timeout_budgets_seconds,
+        last_timeout_stage=policy.cpu_blocking_stage,
+        semantic_canary_accepted=policy.semantic_canary_accepted,
+    )
+    decision = decide_path_b_runtime(evidence, policy)
+    selected_path = select_path_for_runtime(decision, PathBRuntimePurpose.CANARY)
+    return evidence, decision, selected_path
 
 
 def main() -> int:
@@ -90,9 +132,34 @@ def main() -> int:
         print("MANUAL_TERMINAL_TASK_REQUIRED")
         print(
             "Run again from the base environment with --execute after confirming "
-            "offline model artifacts are ready."
+            "offline model artifacts are ready. Runtime policy will be checked first."
         )
         return 0
+
+    try:
+        evidence, runtime_decision, selected_path = _evaluate_runtime_policy(repo_root, args)
+    except Exception as exc:
+        print(f"PHASE_9F2B_RUNTIME_POLICY_FAILED:{type(exc).__name__}")
+        print("private_values_persisted=false")
+        return 6
+
+    print("PHASE_9F2B_RUNTIME_POLICY")
+    print(f"runtime_verdict={runtime_decision.verdict.value}")
+    print(f"reason_code={runtime_decision.reason_code}")
+    print(f"actual_device={evidence.actual_device}")
+    print(f"cuda_available={evidence.cuda_available}")
+    print(f"canary_allowed={runtime_decision.canary_allowed}")
+    print(f"production_allowed={runtime_decision.production_allowed}")
+    print(f"semantic_quality_evaluable={runtime_decision.semantic_quality_evaluable}")
+    print(f"selected_path={selected_path.value}")
+    print(f"fallback_path={runtime_decision.fallback_path.value}")
+
+    if selected_path != Phase9EvaluationPath.B_DOCLING_SEMANTIC:
+        print("PHASE_9F2B_RUNTIME_BLOCKED")
+        print("model_loaded=false")
+        print("inference_executed=false")
+        print("private_values_persisted=false")
+        return 6
 
     try:
         observation, metadata = execute_phase9f_path_b_observation(
@@ -112,6 +179,12 @@ def main() -> int:
         print(f"PHASE_9F2B_DRY_RUN_FAILED:{type(exc).__name__}")
         print(f"semantic_timeout_seconds={args.timeout_seconds}")
         return 4
+
+    metadata["runtime_verdict"] = runtime_decision.verdict.value
+    metadata["runtime_reason_code"] = runtime_decision.reason_code
+    metadata["runtime_actual_device"] = evidence.actual_device
+    metadata["runtime_canary_allowed"] = runtime_decision.canary_allowed
+    metadata["runtime_production_allowed"] = runtime_decision.production_allowed
 
     payload = {
         "phase": "9F.2B",
