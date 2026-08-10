@@ -4,6 +4,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 from typing import Optional
@@ -16,6 +17,27 @@ from document_engine.runtime.worker_errors import (
 )
 
 logger = logging.getLogger(__name__)
+
+_SEMANTIC_STAGE_RE = re.compile(
+    r"^SEMANTIC_STAGE stage=(?P<stage>[a-z0-9_]+) elapsed_seconds=(?P<elapsed>[0-9.]+)$"
+)
+
+
+def _last_semantic_stage(stderr_data: str) -> tuple[Optional[str], Optional[float]]:
+    """Return the last privacy-safe semantic stage marker emitted by a worker."""
+
+    last_stage: Optional[str] = None
+    last_elapsed: Optional[float] = None
+    for raw_line in (stderr_data or "").splitlines():
+        match = _SEMANTIC_STAGE_RE.match(raw_line.strip())
+        if not match:
+            continue
+        last_stage = match.group("stage")
+        try:
+            last_elapsed = float(match.group("elapsed"))
+        except ValueError:
+            last_elapsed = None
+    return last_stage, last_elapsed
 
 
 def resolve_worker_python(parser_id: str, repository_root: Optional[Path] = None) -> str:
@@ -101,7 +123,7 @@ class WorkerClient:
             )
 
             if stderr_data:
-                # Log stderr messages without dumping full OCR text
+                # Log stderr messages without dumping full OCR text.
                 lines = stderr_data.strip().splitlines()
                 summary_lines = lines[:5] + (["..."] if len(lines) > 5 else [])
                 logger.debug(
@@ -128,7 +150,7 @@ class WorkerClient:
                     error_message="Worker stdout returned empty response.",
                 )
 
-            # Parse JSON output from stdout
+            # Parse JSON output from stdout.
             try:
                 data = json.loads(stdout_data)
                 return WorkerResponse.model_validate(data)
@@ -143,9 +165,15 @@ class WorkerClient:
 
         except subprocess.TimeoutExpired:
             process.kill()
-            process.communicate()
+            _stdout_after_kill, stderr_after_kill = process.communicate()
+            last_stage, stage_elapsed = _last_semantic_stage(stderr_after_kill)
+            detail = ""
+            if last_stage is not None:
+                detail = f"; last_stage={last_stage}"
+                if stage_elapsed is not None:
+                    detail += f"; stage_elapsed_seconds={stage_elapsed:.3f}"
             raise WorkerTimeoutError(
-                f"Worker '{request.parser_id}' timed out after {timeout_sec}s"
+                f"Worker '{request.parser_id}' timed out after {timeout_sec}s{detail}"
             )
         except Exception as e:
             if isinstance(e, (WorkerNotFoundError, WorkerTimeoutError)):
