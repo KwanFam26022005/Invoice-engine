@@ -77,4 +77,15 @@ Nested output is flattened into atomic paths such as `common.grand_total` and `l
 6. Run the worker healthcheck and only then execute the synthetic semantic canary.
 7. The optional canary must produce semantic candidates and ground at least one candidate back to synthetic `DocumentIR` evidence.
 
-A real model canary is not considered verified until actual local inference has been run successfully. Phase 9E must not start while Phase 9D real inference is still unverified.
+## Operator execution evidence — 2026-08-10
+
+A local CPU/offline synthetic canary was reported successful by the operator:
+
+```text
+1 passed in 661.34s (0:11:01)
+TOTAL_CANARY_SECONDS: 662.7683394
+```
+
+The command explicitly configured the isolated semantic worker, local artifact path, CPU execution, disabled 8-bit loading, `HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`, and the opt-in engine-test flag. The test itself requires semantic candidates and at least one `EvidenceGrounder`-grounded candidate.
+
+This is sufficient execution evidence to move development focus to Phase 9E. The console excerpt did not include `git rev-parse HEAD`, so the immutable Phase 9D freeze SHA should still be confirmed from the same local checkout before final benchmark bookkeeping.

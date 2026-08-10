@@ -1,37 +1,72 @@
-"""Check script for PaddleOCR-VL environment status and model artifact readiness."""
+"""Inspect the installed PaddleOCR-VL API without loading model weights."""
 
+import importlib
 import importlib.util
-from pathlib import Path
+import inspect
+import json
 import sys
 
 
-def check_paddle_env():
-    print("--- PaddleOCR-VL Environment Status ---")
-    print(f"Python interpreter: {sys.executable}")
-    print(f"Python version: {sys.version.split()[0]}")
+def _version(package: str):
+    try:
+        module = importlib.import_module(package)
+        return getattr(module, "__version__", "installed")
+    except Exception:
+        return None
 
-    has_paddle = importlib.util.find_spec("paddle") is not None
-    has_paddleocr = importlib.util.find_spec("paddleocr") is not None
 
-    print(f"paddlepaddle installed: {has_paddle}")
-    print(f"paddleocr installed: {has_paddleocr}")
+def main() -> None:
+    modules = {
+        "paddle": importlib.util.find_spec("paddle") is not None,
+        "paddleocr": importlib.util.find_spec("paddleocr") is not None,
+        "pydantic": importlib.util.find_spec("pydantic") is not None,
+    }
 
-    if has_paddle:
-        import paddle
+    api_symbols = {
+        "PaddleOCRVL": False,
+        "predict": False,
+        "predict_iter": False,
+    }
+    signatures = {}
+    import_error = None
 
-        print(f"paddle version: {getattr(paddle, '__version__', 'installed')}")
+    if modules["paddleocr"]:
+        try:
+            from paddleocr import PaddleOCRVL
 
-    if has_paddleocr:
-        import paddleocr
+            api_symbols["PaddleOCRVL"] = True
+            api_symbols["predict"] = callable(getattr(PaddleOCRVL, "predict", None))
+            api_symbols["predict_iter"] = callable(
+                getattr(PaddleOCRVL, "predict_iter", None)
+            )
+            signatures["PaddleOCRVL.__init__"] = str(inspect.signature(PaddleOCRVL.__init__))
+            if api_symbols["predict"]:
+                signatures["PaddleOCRVL.predict"] = str(
+                    inspect.signature(PaddleOCRVL.predict)
+                )
+            if api_symbols["predict_iter"]:
+                signatures["PaddleOCRVL.predict_iter"] = str(
+                    inspect.signature(PaddleOCRVL.predict_iter)
+                )
+        except Exception as exc:
+            import_error = type(exc).__name__
 
-        print(f"paddleocr version: {getattr(paddleocr, '__version__', 'installed')}")
-
-    user_home = Path.home()
-    paddle_cache = user_home / ".paddleocr"
-    has_pdiparams = paddle_cache.exists() and any(paddle_cache.rglob("*.pdiparams"))
-    print(f"Paddle model artifacts present (.pdiparams): {has_pdiparams} ({paddle_cache})")
-    print("--------------------------------------")
+    payload = {
+        "modules": modules,
+        "versions": {
+            "python": sys.version.split()[0],
+            "paddle": _version("paddle"),
+            "paddleocr": _version("paddleocr"),
+            "pydantic": _version("pydantic"),
+        },
+        "api_symbols": api_symbols,
+        "signatures": signatures,
+        "import_error": import_error,
+        "inference_executed": False,
+        "model_loaded": False,
+    }
+    print(json.dumps(payload, indent=2))
 
 
 if __name__ == "__main__":
-    check_paddle_env()
+    main()
