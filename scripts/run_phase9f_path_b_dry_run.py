@@ -11,6 +11,7 @@ from document_engine.evaluation.phase9f_path_b import (
     execute_phase9f_path_b_observation,
     probe_phase9f_path_b_alias,
 )
+from document_engine.runtime.worker_errors import WorkerTimeoutError
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -101,6 +102,12 @@ def main() -> int:
             allow_heavy_execution=True,
             semantic_timeout_seconds=args.timeout_seconds,
         )
+    except WorkerTimeoutError as exc:
+        print("PHASE_9F2B_DRY_RUN_FAILED:WorkerTimeoutError")
+        print(f"semantic_timeout_seconds={args.timeout_seconds}")
+        print(f"timeout_diagnostic={exc}")
+        print("private_values_persisted=false")
+        return 4
     except Exception as exc:
         print(f"PHASE_9F2B_DRY_RUN_FAILED:{type(exc).__name__}")
         print(f"semantic_timeout_seconds={args.timeout_seconds}")
