@@ -284,13 +284,13 @@ def execute_phase9f_path_b_observation(
     exact_match_count = 0
     normalized_match_count = 0
     false_positive_count = 0
-    normalized_by_candidate_id: Dict[int, bool] = {}
+    normalized_by_field: Dict[str, bool] = {}
 
     for candidate in proposed:
         audit_entry = confirmed.get(candidate.field_path)
         if audit_entry is None:
             false_positive_count += 1
-            normalized_by_candidate_id[id(candidate)] = False
+            normalized_by_field[candidate.field_path] = False
             continue
         exact, normalized = compare_values(
             audit_entry.expected,
@@ -299,7 +299,7 @@ def execute_phase9f_path_b_observation(
         )
         exact_match_count += int(exact)
         normalized_match_count += int(normalized)
-        normalized_by_candidate_id[id(candidate)] = normalized
+        normalized_by_field[candidate.field_path] = normalized
         if not normalized:
             false_positive_count += 1
 
@@ -309,7 +309,7 @@ def execute_phase9f_path_b_observation(
     for grounded in grounding_report.candidates:
         if grounded.grounding_status == GroundingStatus.GROUNDED:
             grounded_prediction_count += 1
-            if normalized_by_candidate_id.get(id(grounded.candidate), False):
+            if normalized_by_field.get(grounded.candidate.field_path, False):
                 grounded_correct_count += 1
         elif grounded.grounding_status == GroundingStatus.UNSUPPORTED:
             unsupported_prediction_count += 1
