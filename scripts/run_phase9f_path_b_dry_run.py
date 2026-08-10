@@ -27,6 +27,12 @@ def _parser() -> argparse.ArgumentParser:
         default="workspace/phase9f/path_b_current_pilot_dry_run.json",
     )
     parser.add_argument(
+        "--timeout-seconds",
+        type=float,
+        default=180.0,
+        help="Semantic worker execution budget in seconds (default: 180).",
+    )
+    parser.add_argument(
         "--execute",
         action="store_true",
         help="Explicitly permit the real local Docling/NuExtract model call.",
@@ -54,6 +60,10 @@ def _print_eligibility(report) -> None:
 
 def main() -> int:
     args = _parser().parse_args()
+    if args.timeout_seconds <= 0:
+        print("PHASE_9F2B_INVALID_TIMEOUT")
+        return 2
+
     repo_root = Path.cwd().resolve()
 
     try:
@@ -72,13 +82,14 @@ def main() -> int:
         return 3
 
     if not args.execute:
+        print(f"semantic_timeout_seconds={args.timeout_seconds}")
         print("model_loaded=false")
         print("inference_executed=false")
         print("private_values_persisted=false")
         print("MANUAL_TERMINAL_TASK_REQUIRED")
         print(
-            "Run again from the dedicated local semantic environment with --execute "
-            "after confirming offline model artifacts are ready."
+            "Run again from the base environment with --execute after confirming "
+            "offline model artifacts are ready."
         )
         return 0
 
@@ -88,9 +99,11 @@ def main() -> int:
             repo_root=repo_root,
             manifest_path=args.manifest,
             allow_heavy_execution=True,
+            semantic_timeout_seconds=args.timeout_seconds,
         )
     except Exception as exc:
         print(f"PHASE_9F2B_DRY_RUN_FAILED:{type(exc).__name__}")
+        print(f"semantic_timeout_seconds={args.timeout_seconds}")
         return 4
 
     payload = {
@@ -109,11 +122,13 @@ def main() -> int:
 
     print("PHASE_9F2B_DRY_RUN_EXECUTED")
     print(f"semantic_success={metadata['semantic_success']}")
+    print(f"semantic_error_code={metadata['semantic_error_code']}")
     print(f"predicted_family={metadata['predicted_family']}")
     print(f"candidate_count={metadata['candidate_count']}")
     print(f"grounded_count={metadata['grounded_count']}")
     print(f"unsupported_count={metadata['unsupported_count']}")
     print(f"abstained_count={metadata['abstained_count']}")
+    print(f"semantic_timeout_seconds={metadata['semantic_timeout_seconds']}")
     print(f"output={output_path.as_posix()}")
     print("private_values_persisted=false")
     return 0 if metadata["semantic_success"] else 5
