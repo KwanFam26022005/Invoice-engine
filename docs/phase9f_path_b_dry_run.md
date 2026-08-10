@@ -27,6 +27,36 @@ The Docling semantic worker uses the frozen NuExtract model identity already
 recorded by the semantic canary. This phase does not change model configuration,
 prompts, schemas, classifier rules, preprocessing, or grounding thresholds.
 
+## Runtime policy freeze
+
+Path B runtime suitability is separate from semantic quality. The tracked policy
+is:
+
+`configs/evaluation/phase9f_path_b_runtime_policy.yaml`
+
+The current frozen CPU evidence is:
+
+- lightweight Docling semantic healthcheck: PASS;
+- API/cache/offline/resource readiness: PASS;
+- actual device: CPU;
+- 180 second controlled execution: timeout;
+- 600 second controlled execution: timeout;
+- diagnostic blocking stage: `extraction_started`.
+
+Therefore the current CPU verdict is:
+
+`CPU_EXECUTION_SUITABILITY_BLOCKED`
+
+This verdict does **not** mean that NuExtract semantic quality failed. Semantic
+quality was not evaluable because the worker never returned a semantic result.
+For CPU runtime, Path B can still be healthchecked but semantic canary and
+production execution are blocked by policy. The deterministic fallback route is
+Path A (`a_deterministic`).
+
+CUDA-capable runtime remains canary-only until semantic extraction and evidence
+grounding are reviewed and explicitly accepted. Production Path B remains false
+until that acceptance is frozen in the policy.
+
 ## Probe without model loading
 
 From the repository root:
@@ -50,10 +80,10 @@ MANUAL_TERMINAL_TASK_REQUIRED
 
 This command must not load the semantic model.
 
-## Real one-document dry run
+## Policy-gated execution
 
-Run only from the dedicated local semantic environment after the offline model
-cache/artifacts readiness check passes:
+Run the runner from the base application environment. The `WorkerClient` resolves
+and launches the dedicated `.venv-docling-semantic` worker interpreter.
 
 ```powershell
 python scripts\run_phase9f_path_b_dry_run.py `
@@ -61,17 +91,39 @@ python scripts\run_phase9f_path_b_dry_run.py `
   --execute
 ```
 
-The command performs exactly one semantic execution and writes a privacy-safe
-count-only result under ignored `workspace/phase9f/`.
+Before any heavy model call the runner performs a lightweight worker healthcheck,
+loads the tracked runtime policy, and emits a privacy-safe decision.
 
-Do not switch the alias to a holdout document. Do not use the manifest family to
-select the schema. Do not tune the classifier, semantic template, model, or
-grounder from the result of this dry run.
+On the currently frozen CPU runtime the expected result is:
+
+```text
+PHASE_9F2B_RUNTIME_POLICY
+runtime_verdict=CPU_EXECUTION_SUITABILITY_BLOCKED
+reason_code=CPU_EXTRACTION_TIMEOUT_CONFIRMED
+actual_device=cpu
+canary_allowed=False
+production_allowed=False
+semantic_quality_evaluable=False
+selected_path=a_deterministic
+fallback_path=a_deterministic
+PHASE_9F2B_RUNTIME_BLOCKED
+model_loaded=false
+inference_executed=false
+private_values_persisted=false
+```
+
+The runner intentionally does not execute Path A automatically in the same
+invocation. This preserves Phase 9F path independence; it reports the fallback
+route only.
+
+On a suitable CUDA runtime the policy may return
+`ACCELERATOR_CANARY_REQUIRED`, allowing exactly one Path B canary while keeping
+production execution disabled until acceptance.
 
 ## Interpretation
 
-A successful dry run proves only that the frozen Path B dataflow can execute on
-a legitimate CURRENT_PILOT document:
+A future successful accelerator canary would prove only that the frozen Path B
+dataflow can execute on a legitimate CURRENT_PILOT document:
 
 ```text
 PDF
@@ -79,6 +131,7 @@ PDF
  -> frozen DocumentClassifier
  -> runtime predicted_family
  -> registered semantic schema
+ -> runtime policy gate
  -> Docling/NuExtract local semantic candidates
  -> deterministic EvidenceGrounder
  -> private post-inference audit comparison
@@ -86,5 +139,5 @@ PDF
 ```
 
 It does not establish generalization accuracy and does not authorize a holdout
-batch. Holdout execution remains a later explicit gate after this one-document
-result is reviewed and frozen.
+batch. Holdout execution remains a later explicit gate after the one-document
+semantic + grounding result is reviewed and frozen.
