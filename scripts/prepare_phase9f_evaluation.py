@@ -101,7 +101,7 @@ def main() -> int:
     print("model_loaded=false")
     print("inference_executed=false")
     print("private_values_persisted=false")
-    print("")
+    print()
     print("MANUAL_TERMINAL_TASK_REQUIRED")
     print("Next task: Phase 9F.2 per-path execution adapter and one-document dry run.")
     print("Do not run batch A/B/C inference yet.")

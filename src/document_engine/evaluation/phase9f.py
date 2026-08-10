@@ -45,7 +45,7 @@ class Phase9FRunContract(BaseModel):
     unknown_family_semantic_policy: str = "abstain"
 
     @model_validator(mode="after")
-    def validate_fairness(self) -> "Phase9FRunContract":
+    def validate_fairness(self) -> Phase9FRunContract:
         if self.allow_oracle_family:
             raise ValueError("Phase 9F must not use audited/expected family as an extraction oracle.")
         if self.allow_holdout_tuning:
@@ -61,7 +61,7 @@ class Phase9FRunContract(BaseModel):
         return self
 
     @classmethod
-    def load_yaml(cls, path: Path) -> "Phase9FRunContract":
+    def load_yaml(cls, path: Path) -> Phase9FRunContract:
         data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
         return cls.model_validate(data)
 
@@ -142,7 +142,7 @@ class Phase9FDocumentObservation(BaseModel):
     peak_rss_mb: Optional[float] = Field(default=None, ge=0.0)
 
     @model_validator(mode="after")
-    def validate_counts(self) -> "Phase9FDocumentObservation":
+    def validate_counts(self) -> Phase9FDocumentObservation:
         if self.exact_match_count > self.confirmed_field_count:
             raise ValueError("Exact matches cannot exceed confirmed audited fields.")
         if self.normalized_match_count > self.confirmed_field_count:
