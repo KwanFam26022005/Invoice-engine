@@ -25,6 +25,11 @@ class PathBRuntimeVerdict(str, Enum):
     ACCELERATOR_ACCEPTED = "ACCELERATOR_ACCEPTED"
 
 
+class PathBRuntimePurpose(str, Enum):
+    CANARY = "canary"
+    PRODUCTION = "production"
+
+
 class Phase9FPathBRuntimePolicyConfig(BaseModel):
     """Tracked machine-readable policy; contains no private document data."""
 
@@ -179,3 +184,16 @@ def decide_path_b_runtime(
         fallback_path=policy.fallback_path,
         reason_code="UNSUPPORTED_PATH_B_DEVICE",
     )
+
+
+def select_path_for_runtime(
+    decision: Phase9FPathBRuntimeDecision,
+    purpose: PathBRuntimePurpose,
+) -> Phase9EvaluationPath:
+    """Select Path B only when the frozen runtime decision permits the requested purpose."""
+
+    if purpose == PathBRuntimePurpose.CANARY and decision.canary_allowed:
+        return Phase9EvaluationPath.B_DOCLING_SEMANTIC
+    if purpose == PathBRuntimePurpose.PRODUCTION and decision.production_allowed:
+        return Phase9EvaluationPath.B_DOCLING_SEMANTIC
+    return decision.fallback_path
