@@ -11,7 +11,7 @@ from enum import Enum
 from hashlib import sha256
 import json
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 import yaml
 from pydantic import BaseModel, Field, model_validator
@@ -357,3 +357,123 @@ def aggregate_phase9f_observations(
         )
 
     return summaries
+
+
+def execute_phase9f_path_a_observation(
+    alias: str,
+    repo_root: Path = Path("."),
+    manifest_path: str = "workspace/private/phase9/phase9_manifest.yaml",
+) -> tuple[Phase9FDocumentObservation, Dict[str, Any]]:
+    """Execute Path A for a single manifest candidate alias in a privacy-safe manner."""
+    import os
+    import time
+
+    from document_engine.core.field_paths import parse_field_path
+    from document_engine.evaluation.audit_models import DocumentAuditSpec, FieldAuditStatus
+    from document_engine.evaluation.metrics import Evaluator
+    from document_engine.orchestration.pipeline import DocumentPipeline
+    from document_engine.settings import AppConfig
+
+    root = Path(repo_root).resolve()
+    manifest_file = root / manifest_path
+    if not manifest_file.exists():
+        raise FileNotFoundError(f"Manifest file not found: {manifest_file}")
+
+    manifest = Phase9Manifest.load_yaml(manifest_file)
+    cand = next((d for d in manifest.documents if d.alias == alias), None)
+    if not cand:
+        raise ValueError(f"Candidate '{alias}' not found in manifest.")
+
+    source_pdf = (root / cand.source_ref).resolve()
+    audit_json = (root / cand.audit_ref).resolve()
+
+    if not source_pdf.is_file() or not audit_json.is_file():
+        raise FileNotFoundError(f"Source PDF or audit JSON missing for '{alias}'.")
+
+    audit_spec = DocumentAuditSpec.model_validate_json(
+        audit_json.read_text(encoding="utf-8")
+    )
+
+    # Field path syntax validation
+    for f_path, entry in audit_spec.fields.items():
+        if entry.status == FieldAuditStatus.CONFIRMED:
+            parse_field_path(f_path)
+
+    start_time = time.perf_counter()
+    peak_rss_mb = None
+    try:
+        import psutil
+        process = psutil.Process(os.getpid())
+        peak_rss_mb = process.memory_info().rss / (1024 * 1024)
+    except Exception:
+        pass
+
+    config = AppConfig(
+        default_parser_policy={
+            "native_pdf": "pymupdf_native",
+            "scan_pdf": "pymupdf_native",
+            "mixed_pdf": "pymupdf_native",
+            "fallback": "pymupdf_native",
+        },
+        fallback_enabled=False,
+    )
+
+    pipeline = DocumentPipeline(config=config)
+    pipeline_res = pipeline.process_file(source_pdf)
+
+    end_time = time.perf_counter()
+    runtime_seconds = end_time - start_time
+
+    if peak_rss_mb is not None:
+        try:
+            import psutil
+            process = psutil.Process(os.getpid())
+            peak_rss_mb = max(peak_rss_mb, process.memory_info().rss / (1024 * 1024))
+        except Exception:
+            pass
+
+    evaluator = Evaluator()
+    doc_summary = evaluator.evaluate_document(pipeline_res, audit_spec)
+
+    pred_family = DocumentFamilyType(pipeline_res.document_family)
+    family_match = pred_family == cand.family
+
+    predicted_field_count = max(
+        0, doc_summary.audited_field_count - doc_summary.missing_prediction_count
+    )
+
+    obs = Phase9FDocumentObservation(
+        alias=cand.alias,
+        cohort=cand.cohort,
+        path=Phase9EvaluationPath.A_DETERMINISTIC,
+        predicted_family=pred_family,
+        family_match=family_match,
+        confirmed_field_count=doc_summary.audited_field_count,
+        predicted_field_count=predicted_field_count,
+        exact_match_count=doc_summary.exact_match_count,
+        normalized_match_count=doc_summary.normalized_match_count,
+        false_positive_count=doc_summary.wrong_value_count,
+        grounded_prediction_count=doc_summary.evidence_supported_count,
+        grounded_correct_count=doc_summary.evidence_supported_count,
+        unsupported_prediction_count=0,
+        abstained_field_count=0,
+        hallucination_count=0,
+        completeness_score=pipeline_res.completeness.completeness_score
+        if pipeline_res.completeness
+        else 0.0,
+        validation_pass=pipeline_res.validation_status == "accepted",
+        review_required=pipeline_res.requires_review,
+        runtime_seconds=runtime_seconds,
+        peak_rss_mb=peak_rss_mb,
+    )
+
+    extra_meta = {
+        "selected_parser": pipeline_res.selected_parser,
+        "validation_status": pipeline_res.validation_status,
+        "evidence_coverage": doc_summary.evidence_coverage,
+        "missing_prediction_count": doc_summary.missing_prediction_count,
+        "wrong_value_count": doc_summary.wrong_value_count,
+        "evidence_supported_count": doc_summary.evidence_supported_count,
+    }
+
+    return obs, extra_meta

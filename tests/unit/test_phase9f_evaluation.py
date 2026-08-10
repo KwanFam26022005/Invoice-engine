@@ -239,3 +239,22 @@ def test_phase9f_aggregation_is_field_weighted_and_resource_safe():
     assert summary.metrics["runtime_seconds"] == pytest.approx(3.0)
     assert summary.metrics["peak_rss_mb"] == pytest.approx(300.0)
     assert summary.metrics["hallucination_count"] == 1.0
+
+
+def test_execute_phase9f_path_a_observation_dry_run(tmp_path: Path):
+    from document_engine.evaluation.phase9f import execute_phase9f_path_a_observation
+
+    manifest_file = Path("workspace/private/phase9/phase9_manifest.yaml")
+    if not manifest_file.exists():
+        pytest.skip("Private manifest not present in workspace")
+
+    obs, meta = execute_phase9f_path_a_observation(
+        alias="current_sales_001",
+        repo_root=Path("."),
+    )
+
+    assert obs.alias == "current_sales_001"
+    assert obs.path == Phase9EvaluationPath.A_DETERMINISTIC
+    assert obs.confirmed_field_count > 0
+    assert "selected_parser" in meta
+    assert "validation_status" in meta
