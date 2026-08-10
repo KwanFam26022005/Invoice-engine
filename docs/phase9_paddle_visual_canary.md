@@ -36,6 +36,29 @@ The installed local environment remains the source of truth. Before any real inf
 
 The checker inspects symbols/signatures only. It does not load model weights.
 
+## Operator API inspection evidence — 2026-08-10
+
+The operator inspected both local Paddle environments without running inference or loading weights.
+
+Preferred isolated worker environment:
+
+```text
+.venv-paddlevl
+Python 3.10.11
+paddle 3.2.1
+paddleocr 3.7.0
+pydantic 2.13.4
+PaddleOCRVL: available
+predict: available
+predict_iter: available
+```
+
+A secondary `.venv-paddle3` environment also exposed the same PaddleOCRVL API surface, but used Paddle 3.2.0. Phase 9E keeps `.venv-paddlevl` as the canonical worker environment because the repository setup contract requires `paddlepaddle>=3.2.1`.
+
+The locally inspected constructor exposes `pipeline_version`, `layout_detection_model_name`, `layout_detection_model_dir`, `vl_rec_model_name`, `vl_rec_model_dir`, `vl_rec_backend`, `use_queues`, and the expected visual preprocessing toggles. The locally inspected `predict` and `predict_iter` methods expose the expected inference controls. Therefore the API-inspection gate is satisfied.
+
+No inference was executed and no model was loaded during this inspection.
+
 ## Offline runtime boundary
 
 Normal Phase 9E inference requires both explicit local model directories:
@@ -96,21 +119,21 @@ No private corpus is used.
 1. Sync the Phase 9 branch and run the normal lightweight/full code gates.
 2. Inspect `.venv-paddlevl` with `scripts/check_paddleocr_vl_env.py`.
 3. Confirm exact installed `PaddleOCRVL` signatures before model preparation.
-4. Prepare the required layout and VL-recognition model artifacts explicitly.
-5. Configure `PADDLE_LAYOUT_MODEL_DIR` and `PADDLE_VL_REC_MODEL_DIR`.
-6. Run a worker healthcheck with downloads disabled.
-7. Run the optional synthetic visual canary once.
-8. Record runtime, block count, table count, geometry count, and provenance.
-9. Stop. Do not tune against the private corpus in Phase 9E.
+4. Obtain the installed PaddleX pipeline configuration and confirm the exact default layout/VL model names.
+5. Prepare the required layout and VL-recognition model artifacts explicitly.
+6. Configure `PADDLE_LAYOUT_MODEL_DIR` and `PADDLE_VL_REC_MODEL_DIR`.
+7. Run a worker healthcheck with downloads disabled.
+8. Run the optional synthetic visual canary once.
+9. Record runtime, block count, table count, geometry count, and provenance.
+10. Stop. Do not tune against the private corpus in Phase 9E.
 
 ## Status
 
-Phase 9E code is an implementation canary only until the local Paddle environment and model artifacts are inspected and a real inference run succeeds.
+The API-inspection gate is complete. Phase 9E remains unverified until local model artifacts are prepared and a real synthetic visual inference succeeds.
 
 Allowed status labels:
 
-- `PHASE_9E_IMPLEMENTED_LOCAL_GATES_PENDING`
-- `PHASE_9E_API_UNAVAILABLE`
+- `PHASE_9E_API_VERIFIED_MODEL_PREP_PENDING`
 - `PHASE_9E_MODEL_CACHE_NOT_READY`
 - `PHASE_9E_RUNTIME_BLOCKED`
 - `PHASE_9E_VISUAL_CANARY_PARTIAL`
