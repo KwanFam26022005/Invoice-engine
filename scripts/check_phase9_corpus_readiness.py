@@ -68,6 +68,7 @@ def main() -> int:
     print(f"missing_family_count: {report.missing_family_count}")
     print(f"missing_layout_group_count: {report.missing_layout_group_count}")
     print(f"prior_tuning_holdout_rejections: {report.prior_tuning_holdout_rejections}")
+    print(f"cohort_family_mismatch_count: {report.cohort_family_mismatch_count}")
     print(f"duplicate_count: {report.duplicate_count}")
     print(f"minimum_documents: {report.minimum_documents}")
     print(f"minimum_layout_groups: {report.minimum_layout_groups}")

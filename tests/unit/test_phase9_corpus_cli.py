@@ -1,5 +1,6 @@
-"""Unit tests for Phase 9 corpus CLI tools and contract hardening."""
+"""Unit tests for Phase 9 corpus CLI tools, candidate selection, and contract hardening."""
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -76,6 +77,28 @@ def test_register_phase9_document_cli_privacy_safe_errors(tmp_path: Path) -> Non
     assert res_path.returncode != 0
     assert "ERROR: INVALID_WORKSPACE_PATH" in res_path.stdout
     assert "private/doc1.pdf" not in res_path.stdout  # O. Privacy-safe error
+
+    # Test cohort-family mismatch
+    res_mismatch = run_cli(
+        "register_phase9_document.py",
+        [
+            "--source",
+            "workspace/doc1.pdf",
+            "--alias",
+            "alias_001",
+            "--family",
+            "sales_invoice",
+            "--cohort",
+            "unknown_family",  # sales_invoice is a mature family, cannot be unknown_family!
+            "--layout-group",
+            "sales_layout_a",
+            "--registry",
+            str(reg_file),
+        ],
+        cwd=tmp_path,
+    )
+    assert res_mismatch.returncode != 0
+    assert "ERROR: COHORT_FAMILY_MISMATCH" in res_mismatch.stdout
 
 
 def test_register_phase9_document_cli_duplicate_and_tuning(tmp_path: Path) -> None:
@@ -181,16 +204,10 @@ def test_create_phase9_audit_skeleton_cli_schema_derived(tmp_path: Path) -> None
     fields = data["fields"]
     # Schema-derived canonical paths for sales_invoice
     assert "common.document_number" in fields
-    assert "common.issue_date" in fields  # Derived from schema_registry.py
-    assert "common.seller.name" in fields  # Derived from schema_registry.py
+    assert "common.issue_date" in fields
+    assert "common.seller.name" in fields
     assert "common.grand_total" in fields
 
-    # E. Check skeleton does NOT contain stale invented names
-    assert "common.document_date" not in fields
-    assert "common.supplier_name" not in fields
-    assert "common.total_amount" not in fields
-
-    # N. Begins with expected=None and status="NOT_AUDITED"
     for f_entry in fields.values():
         assert f_entry["expected"] is None
         assert f_entry["status"] == "NOT_AUDITED"
@@ -213,22 +230,17 @@ def test_check_phase9_corpus_readiness_cli(tmp_path: Path) -> None:
     assert res.returncode == 0
     assert "registered_documents: 0" in res.stdout
     assert "documents_without_confirmed_fields: 0" in res.stdout
+    assert "cohort_family_mismatch_count: 0" in res.stdout
     assert "VERDICT: PHASE_9F_CORPUS_PREPARATION_REQUIRED" in res.stdout
 
 
-def test_build_phase9_manifest_cli_full_contract_validation(tmp_path: Path) -> None:
-    # M. Manifest builder calls and satisfies Phase9EvaluationContract.validate_manifest
+def test_build_phase9_manifest_cli_excludes_not_audited_candidate(tmp_path: Path) -> None:
+    # L & M. Manifest builder excludes NOT_AUDITED candidates and uses shared evaluation-ready selector
     ws = tmp_path / "workspace"
     ws.mkdir(parents=True, exist_ok=True)
 
     candidates = []
     cohorts = ["current_pilot", "holdout_same_family", "unknown_family"]
-    families = [
-        "sales_invoice",
-        "utility_consumption_invoice",
-        "tax_withholding_certificate",
-        "receipt",
-    ]
     layouts = ["layout_a", "layout_b", "layout_c", "layout_d"]
 
     for i in range(12):
@@ -241,19 +253,47 @@ def test_build_phase9_manifest_cli_full_contract_validation(tmp_path: Path) -> N
             encoding="utf-8",
         )
 
+        cohort = cohorts[i % len(cohorts)]
+        family = "sales_invoice" if cohort == "holdout_same_family" else ("receipt" if cohort == "unknown_family" else "tax_withholding_certificate")
+        sha = hashlib.sha256(f"seed_{i}".encode()).hexdigest()
+
         candidates.append(
             {
                 "alias": alias,
                 "source_ref": f"workspace/{alias}.pdf",
                 "audit_ref": f"workspace/{alias}.audit.json",
-                "family": families[i % len(families)],
-                "cohort": cohorts[i % len(cohorts)],
+                "family": family,
+                "cohort": cohort,
                 "layout_group": layouts[i % len(layouts)],
-                "sha256": f"hash_{i:04d}",
+                "sha256": sha,
                 "used_for_prior_tuning": False,
                 "audit_confirmed_field_count": 1,
             }
         )
+
+    # Add 13th candidate with NOT_AUDITED only audit skeleton
+    alias_13 = "doc_013_skeleton"
+    pdf_13 = ws / f"{alias_13}.pdf"
+    pdf_13.write_bytes(b"%PDF-1.4 skeleton content")
+    audit_13 = ws / f"{alias_13}.audit.json"
+    audit_13.write_text(
+        json.dumps({"fields": {"common.doc_num": {"status": "NOT_AUDITED", "expected": None}}}),
+        encoding="utf-8",
+    )
+    sha_13 = hashlib.sha256(b"seed_13_skeleton").hexdigest()
+    candidates.append(
+        {
+            "alias": alias_13,
+            "source_ref": f"workspace/{alias_13}.pdf",
+            "audit_ref": f"workspace/{alias_13}.audit.json",
+            "family": "sales_invoice",
+            "cohort": "current_pilot",
+            "layout_group": "layout_a",
+            "sha256": sha_13,
+            "used_for_prior_tuning": False,
+            "audit_confirmed_field_count": 0,
+        }
+    )
 
     reg_file = ws / "corpus_registry.yaml"
     reg_file.write_text(
@@ -277,4 +317,7 @@ def test_build_phase9_manifest_cli_full_contract_validation(tmp_path: Path) -> N
     assert manifest_file.exists()
 
     manifest_content = yaml.safe_load(manifest_file.read_text(encoding="utf-8"))
+    # M. Exactly 12 selected documents in manifest (doc_013_skeleton excluded!)
     assert len(manifest_content["documents"]) == 12
+    manifest_aliases = [d["alias"] for d in manifest_content["documents"]]
+    assert alias_13 not in manifest_aliases

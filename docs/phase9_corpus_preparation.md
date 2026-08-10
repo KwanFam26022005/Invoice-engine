@@ -23,6 +23,8 @@ To achieve a balanced evaluation across mature schemas and unknown families, the
 > **No Synthetic PDFs**: Synthetic PDFs must never be used to satisfy the real generalization corpus.
 >
 > **UNKNOWN_FAMILY Definition**: The `unknown_family` cohort specifically tests how extraction models handle document types outside the mature specialized mapper families.
+>
+> **Registered != Evaluation-Ready**: Registering a candidate or creating an audit skeleton (`NOT_AUDITED`) is an intake step. A document becomes **evaluation-ready** ONLY after at least one audit field is explicitly `CONFIRMED`. Skeletons with 0 confirmed fields remain ineligible for the evaluation manifest until audited.
 
 ## Minimum Phase 9 Contract Requirements
 
@@ -31,7 +33,7 @@ The formal contract (`configs/evaluation/phase9_schema.yaml`) enforces:
 2. `minimum_layout_groups` = 4
 3. All three required cohorts represented: `current_pilot`, `holdout_same_family`, `unknown_family`
 4. `allow_holdout_tuning` = `false`
-5. Real source PDFs and audited JSON files for every document entry.
+5. Real source PDFs and audited JSON files containing at least 1 `CONFIRMED` field for every document entry.
 
 ## CLI Intake Tooling Workflow
 
@@ -50,8 +52,9 @@ python scripts/register_phase9_document.py \
     --used-for-prior-tuning false
 ```
 
-- SHA256 hashes are automatically computed for duplicate rejection.
+- SHA256 hashes are automatically computed using streaming reads for duplicate rejection.
 - Documents used for prior tuning will be rejected from the `holdout_same_family` cohort.
+- Cohort and family combinations are cross-validated (e.g., `holdout_same_family` requires a mature family; `unknown_family` requires a non-mature family).
 
 ### 2. Generate an Audit Skeleton
 

@@ -1,5 +1,6 @@
 """Private corpus registry and readiness evaluation models for Phase 9."""
 
+import hashlib
 import json
 from pathlib import Path, PurePosixPath
 import re
@@ -10,8 +11,39 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from document_engine.core.models import DocumentFamilyType, PDFProfileType
 from document_engine.evaluation.audit_models import FieldAuditStatus
+from document_engine.semantic.schema_registry import supports_semantic_schema
 
 VALID_COHORTS = {"current_pilot", "holdout_same_family", "unknown_family"}
+
+
+def compute_file_sha256(file_path: Path, chunk_size: int = 65536) -> str:
+    """Compute SHA256 of a file using chunked/streaming read."""
+    hasher = hashlib.sha256()
+    with Path(file_path).open("rb") as handle:
+        while chunk := handle.read(chunk_size):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
+def is_cohort_family_compatible(cohort: str, family: str) -> bool:
+    """Check cohort / family semantic alignment.
+
+    - holdout_same_family: family MUST be supported by mature semantic schema registry.
+    - unknown_family: family MUST NOT be supported by mature semantic schema registry.
+    - current_pilot: allowed for any valid DocumentFamilyType.
+    """
+    try:
+        family_enum = DocumentFamilyType(family)
+    except ValueError:
+        return False
+
+    is_mature = supports_semantic_schema(family_enum)
+
+    if cohort == "holdout_same_family":
+        return is_mature
+    if cohort == "unknown_family":
+        return not is_mature
+    return cohort == "current_pilot"
 
 
 class Phase9CorpusCandidate(BaseModel):
@@ -27,6 +59,13 @@ class Phase9CorpusCandidate(BaseModel):
     sha256: str
     used_for_prior_tuning: bool = False
     audit_confirmed_field_count: int = 0
+
+    @field_validator("sha256")
+    @classmethod
+    def validate_sha256(cls, v: str) -> str:
+        if not v or not re.match(r"^[0-9a-fA-F]{64}$", v.strip()):
+            raise ValueError("SHA256 must be exactly 64 hexadecimal characters.")
+        return v.strip().lower()
 
     @field_validator("source_ref", "audit_ref")
     @classmethod
@@ -82,6 +121,13 @@ class Phase9CorpusRegistry(BaseModel):
 
     registry_version: str = "1.0"
     candidates: List[Phase9CorpusCandidate] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_unique_aliases(self) -> "Phase9CorpusRegistry":
+        aliases = [c.alias for c in self.candidates]
+        if len(aliases) != len(set(aliases)):
+            raise ValueError("Phase 9 registry candidate aliases must be unique.")
+        return self
 
     @classmethod
     def load_yaml(cls, path: Path) -> "Phase9CorpusRegistry":
@@ -169,6 +215,7 @@ class Phase9CorpusReadinessReport(BaseModel):
     missing_family_count: int = 0
     missing_layout_group_count: int = 0
     prior_tuning_holdout_rejections: int = 0
+    cohort_family_mismatch_count: int = 0
     duplicate_count: int = 0
     minimum_documents: int = 12
     minimum_layout_groups: int = 4
@@ -189,13 +236,13 @@ class Phase9CorpusReadinessReport(BaseModel):
         return self
 
 
-def evaluate_corpus_readiness(
+def select_evaluation_ready_candidates(
     registry: Phase9CorpusRegistry,
     base_dir: Path = Path("."),
     minimum_documents: int = 12,
     minimum_layout_groups: int = 4,
-) -> Phase9CorpusReadinessReport:
-    """Evaluate registry candidates against Phase 9 readiness requirements."""
+) -> Tuple[List[Phase9CorpusCandidate], Phase9CorpusReadinessReport]:
+    """Deterministically select evaluation-ready candidates and compute readiness summary."""
     registered = len(registry.candidates)
     seen_shas = set()
     duplicate_count = 0
@@ -214,6 +261,7 @@ def evaluate_corpus_readiness(
     missing_family = 0
     missing_layout = 0
     holdout_rejections = 0
+    mismatch_count = 0
 
     valid_families = {item.value for item in DocumentFamilyType}
 
@@ -259,13 +307,22 @@ def evaluate_corpus_readiness(
         if holdout_rejected:
             holdout_rejections += 1
 
+        cohort_mismatch = not is_cohort_family_compatible(cand.cohort, cand.family)
+        if cohort_mismatch:
+            mismatch_count += 1
+
+        # EVALUATION-READY CANDIDATE CONTRACT:
+        # Requires source_exists, audit_exists AND confirmed_count > 0, family_valid, layout_valid,
+        # not duplicate, not prior-tuned holdout, and cohort/family semantic match.
         is_eligible = (
             source_exists
             and audit_exists
+            and confirmed_count > 0
             and family_valid
             and layout_valid
             and not is_duplicate
             and not holdout_rejected
+            and not cohort_mismatch
         )
 
         if is_eligible:
@@ -278,7 +335,7 @@ def evaluate_corpus_readiness(
             elif cand.cohort == "unknown_family":
                 unknown_count += 1
 
-    return Phase9CorpusReadinessReport(
+    report = Phase9CorpusReadinessReport(
         registered_documents=registered,
         eligible_documents=len(eligible_candidates),
         current_pilot_count=pilot_count,
@@ -292,7 +349,26 @@ def evaluate_corpus_readiness(
         missing_family_count=missing_family,
         missing_layout_group_count=missing_layout,
         prior_tuning_holdout_rejections=holdout_rejections,
+        cohort_family_mismatch_count=mismatch_count,
         duplicate_count=duplicate_count,
         minimum_documents=minimum_documents,
         minimum_layout_groups=minimum_layout_groups,
     )
+
+    return eligible_candidates, report
+
+
+def evaluate_corpus_readiness(
+    registry: Phase9CorpusRegistry,
+    base_dir: Path = Path("."),
+    minimum_documents: int = 12,
+    minimum_layout_groups: int = 4,
+) -> Phase9CorpusReadinessReport:
+    """Evaluate registry candidates against Phase 9 readiness requirements."""
+    _, report = select_evaluation_ready_candidates(
+        registry,
+        base_dir=base_dir,
+        minimum_documents=minimum_documents,
+        minimum_layout_groups=minimum_layout_groups,
+    )
+    return report

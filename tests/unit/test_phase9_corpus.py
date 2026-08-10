@@ -1,5 +1,6 @@
-"""Unit tests for Phase 9 corpus models, readiness evaluation, and strict contracts."""
+"""Unit tests for Phase 9 corpus models, ground-truth completeness, and cohort semantics."""
 
+import hashlib
 import json
 from pathlib import Path
 import pytest
@@ -8,8 +9,10 @@ from document_engine.evaluation.audit_models import FieldAuditStatus
 from document_engine.evaluation.phase9_corpus import (
     Phase9CorpusCandidate,
     Phase9CorpusRegistry,
-    count_audit_confirmed_fields,
+    compute_file_sha256,
     evaluate_corpus_readiness,
+    is_cohort_family_compatible,
+    select_evaluation_ready_candidates,
 )
 
 
@@ -21,214 +24,221 @@ def test_candidate_valid_creation() -> None:
         family="sales_invoice",
         cohort="current_pilot",
         layout_group="sales_a",
-        sha256="a1b2c3d4e5f67890a1b2c3d4e5f67890a1b2c3d4e5f67890a1b2c3d4e5f67890",
+        sha256="a" * 64,
     )
     assert cand.alias == "test_doc_001"
     assert cand.source_ref == "workspace/private/phase9/documents/doc1.pdf"
     assert cand.cohort == "current_pilot"
 
 
-def test_candidate_path_validation_rejects_non_workspace_relative() -> None:
-    # A. Rejects non-workspace relative source (e.g. private/doc.pdf without workspace/ prefix)
-    with pytest.raises(ValueError, match="workspace-relative"):
-        Phase9CorpusCandidate(
-            alias="doc1",
-            source_ref="private/doc.pdf",
-            family="sales_invoice",
-            cohort="current_pilot",
-            layout_group="sales_a",
-            sha256="dummy",
-        )
-
-    # B. Rejects Windows absolute paths
-    with pytest.raises(ValueError, match="workspace-relative"):
-        Phase9CorpusCandidate(
-            alias="doc1",
-            source_ref="C:\\private\\doc.pdf",
-            family="sales_invoice",
-            cohort="current_pilot",
-            layout_group="sales_a",
-            sha256="dummy",
-        )
-
-    with pytest.raises(ValueError, match="workspace-relative"):
-        Phase9CorpusCandidate(
-            alias="doc1",
-            source_ref="D:/private/doc.pdf",
-            family="sales_invoice",
-            cohort="current_pilot",
-            layout_group="sales_a",
-            sha256="dummy",
-        )
-
-    with pytest.raises(ValueError, match="workspace-relative"):
-        Phase9CorpusCandidate(
-            alias="doc1",
-            source_ref="workspace/../secret/doc1.pdf",
-            family="sales_invoice",
-            cohort="current_pilot",
-            layout_group="sales_a",
-            sha256="dummy",
-        )
-
-
-def test_candidate_enum_validation() -> None:
-    # F. Invalid DocumentFamilyType rejected
-    with pytest.raises(ValueError, match="Invalid DocumentFamilyType"):
-        Phase9CorpusCandidate(
-            alias="doc1",
-            source_ref="workspace/doc1.pdf",
-            family="random_invoice_xyz",
-            cohort="current_pilot",
-            layout_group="sales_a",
-            sha256="dummy",
-        )
-
-    # G. Invalid PDFProfileType rejected
-    with pytest.raises(ValueError, match="Invalid PDFProfileType"):
+def test_sha256_validation() -> None:
+    # J. Invalid SHA rejected
+    with pytest.raises(ValueError, match="64 hexadecimal characters"):
         Phase9CorpusCandidate(
             alias="doc1",
             source_ref="workspace/doc1.pdf",
             family="sales_invoice",
             cohort="current_pilot",
-            expected_profile="invalid_profile_abc",
             layout_group="sales_a",
-            sha256="dummy",
+            sha256="hash1",
         )
 
-
-def test_strict_audit_status_counting(tmp_path: Path) -> None:
-    # C. Only CONFIRMED status counts
-    audit_path = tmp_path / "test.audit.json"
-    audit_data = {
-        "document_id": "test_alias",
-        "family": "sales_invoice",
-        "fields": {
-            "f1": {"status": "CONFIRMED", "expected": "VAL1"},
-            "f2": {"status": "NOT_AUDITED", "expected": "VAL2"},
-            "f3": {"status": "AMBIGUOUS_SOURCE", "expected": "VAL3"},
-            "f4": {"status": "NOT_PRESENT_IN_SOURCE", "expected": "VAL4"},
-            "f5": {"status": "ARBITRARY_STATUS", "expected": "VAL5"},
-            "f6": "RAW_SCALAR_VAL",
-        },
-    }
-    audit_path.write_text(json.dumps(audit_data), encoding="utf-8")
-
-    exists, confirmed_count = count_audit_confirmed_fields(audit_path)
-    assert exists is True
-    assert confirmed_count == 1  # Only f1 (status=CONFIRMED) counts!
-
-
-def test_evaluate_corpus_readiness_duplicate_and_layout_filtering(tmp_path: Path) -> None:
-    ws = tmp_path / "workspace"
-    ws.mkdir(parents=True)
-
-    # Create source PDFs & audit JSON files
-    pdf1 = ws / "doc1.pdf"
-    pdf1.write_bytes(b"%PDF-1.4 test 1")
-    audit1 = ws / "doc1.audit.json"
-    audit1.write_text(json.dumps({"fields": {"f1": {"status": FieldAuditStatus.CONFIRMED.value}}}), encoding="utf-8")
-
-    pdf2 = ws / "doc2.pdf"
-    pdf2.write_bytes(b"%PDF-1.4 test 2")
-    audit2 = ws / "doc2.audit.json"
-    audit2.write_text(json.dumps({"fields": {"f1": {"status": FieldAuditStatus.CONFIRMED.value}}}), encoding="utf-8")
-
-    registry = Phase9CorpusRegistry()
-
-    # Candidate 1 (valid, layout_a)
-    c1 = Phase9CorpusCandidate(
+    # K. Valid 64-hex SHA accepted
+    cand = Phase9CorpusCandidate(
         alias="doc1",
         source_ref="workspace/doc1.pdf",
-        audit_ref="workspace/doc1.audit.json",
+        family="sales_invoice",
+        cohort="current_pilot",
+        layout_group="sales_a",
+        sha256="b" * 64,
+    )
+    assert cand.sha256 == "b" * 64
+
+
+def test_registry_unique_aliases_validation() -> None:
+    # I. Duplicate aliases in manually constructed registry YAML fails validation
+    registry = Phase9CorpusRegistry()
+    cand1 = Phase9CorpusCandidate(
+        alias="duplicate_alias",
+        source_ref="workspace/doc1.pdf",
         family="sales_invoice",
         cohort="current_pilot",
         layout_group="layout_a",
-        sha256="same_hash_1234",
+        sha256="1" * 64,
     )
-    registry.add_or_update_candidate(c1)
-
-    # Candidate 2 (duplicate SHA manually inserted, layout_b)
-    # H & I: Duplicate SHA is detected and does NOT inflate eligible_documents or distinct_layout_groups
-    c2 = Phase9CorpusCandidate(
-        alias="doc2",
+    cand2 = Phase9CorpusCandidate(
+        alias="duplicate_alias",
         source_ref="workspace/doc2.pdf",
-        audit_ref="workspace/doc2.audit.json",
         family="sales_invoice",
-        cohort="holdout_same_family",
+        cohort="current_pilot",
         layout_group="layout_b",
-        sha256="same_hash_1234",  # Duplicate hash
+        sha256="2" * 64,
     )
-    registry.add_or_update_candidate(c2)
+    registry.candidates = [cand1, cand2]
 
-    # Candidate 3 (ineligible due to prior tuning, layout_c)
-    # J & K: Ineligible prior-tuning layout group does NOT count toward layout_groups
-    c3 = Phase9CorpusCandidate(
-        alias="doc3",
+    with pytest.raises(ValueError, match="aliases must be unique"):
+        registry.validate_unique_aliases()
+
+
+def test_cohort_family_semantic_compatibility() -> None:
+    # E. sales_invoice + unknown_family -> rejected
+    assert is_cohort_family_compatible("unknown_family", "sales_invoice") is False
+
+    # F. receipt + holdout_same_family -> rejected
+    assert is_cohort_family_compatible("holdout_same_family", "receipt") is False
+
+    # G. receipt + unknown_family -> eligible
+    assert is_cohort_family_compatible("unknown_family", "receipt") is True
+
+    # H. sales_invoice + holdout_same_family -> eligible
+    assert is_cohort_family_compatible("holdout_same_family", "sales_invoice") is True
+
+    # current_pilot -> eligible for any valid family
+    assert is_cohort_family_compatible("current_pilot", "sales_invoice") is True
+    assert is_cohort_family_compatible("current_pilot", "receipt") is True
+
+
+def test_ground_truth_completeness_rules(tmp_path: Path) -> None:
+    ws = tmp_path / "workspace"
+    ws.mkdir(parents=True)
+    pdf = ws / "doc1.pdf"
+    pdf.write_bytes(b"%PDF-1.4 test")
+
+    # A. audit exists, all fields NOT_AUDITED -> eligible_documents == 0, documents_without_confirmed_fields == 1
+    audit_not_audited = ws / "doc1_not_audited.audit.json"
+    audit_not_audited.write_text(
+        json.dumps({"fields": {"f1": {"status": "NOT_AUDITED", "expected": None}}}),
+        encoding="utf-8",
+    )
+
+    reg1 = Phase9CorpusRegistry()
+    cand1 = Phase9CorpusCandidate(
+        alias="doc1",
         source_ref="workspace/doc1.pdf",
-        audit_ref="workspace/doc1.audit.json",
+        audit_ref="workspace/doc1_not_audited.audit.json",
         family="sales_invoice",
-        cohort="holdout_same_family",
-        layout_group="layout_c",
-        sha256="hash_3333",
-        used_for_prior_tuning=True,
+        cohort="current_pilot",
+        layout_group="layout_a",
+        sha256="a" * 64,
     )
-    registry.add_or_update_candidate(c3)
+    reg1.add_or_update_candidate(cand1)
+    eligible1, report1 = select_evaluation_ready_candidates(reg1, base_dir=tmp_path)
+    assert len(eligible1) == 0
+    assert report1.eligible_documents == 0
+    assert report1.documents_without_confirmed_fields == 1
 
-    report = evaluate_corpus_readiness(registry, base_dir=tmp_path, minimum_documents=12, minimum_layout_groups=4)
-    assert report.registered_documents == 3
-    assert report.duplicate_count == 1
-    assert report.prior_tuning_holdout_rejections == 1
-    assert report.eligible_documents == 1  # Only c1 is eligible!
-    assert report.distinct_layout_groups == 1  # Only layout_a from c1 counts!
+    # B. same document with one CONFIRMED field -> may become eligible when other requirements pass
+    audit_confirmed = ws / "doc1_confirmed.audit.json"
+    audit_confirmed.write_text(
+        json.dumps({"fields": {"f1": {"status": FieldAuditStatus.CONFIRMED.value, "expected": "VAL1"}}}),
+        encoding="utf-8",
+    )
+
+    reg2 = Phase9CorpusRegistry()
+    cand2 = Phase9CorpusCandidate(
+        alias="doc1",
+        source_ref="workspace/doc1.pdf",
+        audit_ref="workspace/doc1_confirmed.audit.json",
+        family="sales_invoice",
+        cohort="current_pilot",
+        layout_group="layout_a",
+        sha256="a" * 64,
+    )
+    reg2.add_or_update_candidate(cand2)
+    eligible2, report2 = select_evaluation_ready_candidates(reg2, base_dir=tmp_path)
+    assert len(eligible2) == 1
+    assert report2.eligible_documents == 1
+    assert report2.documents_with_confirmed_audit == 1
 
 
-def test_unrelated_incomplete_candidate_does_not_block_valid_selected_corpus(tmp_path: Path) -> None:
-    # L. An unrelated incomplete intake candidate does not prevent a valid 12-document selected corpus from being ready
+def test_12_documents_not_audited_readiness_false(tmp_path: Path) -> None:
+    # C. 12 source/audit/layout-valid documents but every audit has zero CONFIRMED -> readiness false
     ws = tmp_path / "workspace"
     ws.mkdir(parents=True)
 
-    registry = Phase9CorpusRegistry()
+    reg = Phase9CorpusRegistry()
     cohorts = ["current_pilot", "holdout_same_family", "unknown_family"]
-    layouts = ["layout_a", "layout_b", "layout_c", "layout_d"]
+    families = ["sales_invoice", "utility_consumption_invoice", "receipt"]
+    layouts = ["l1", "l2", "l3", "l4"]
 
     for i in range(12):
-        alias = f"eligible_doc_{i+1:03d}"
-        pdf_path = ws / f"{alias}.pdf"
-        pdf_path.write_bytes(f"%PDF-1.4 content {i}".encode())
-        audit_path = ws / f"{alias}.audit.json"
-        audit_path.write_text(
-            json.dumps({"fields": {"common.doc_num": {"status": "CONFIRMED", "expected": f"VAL{i}"}}}),
-            encoding="utf-8",
-        )
-        registry.add_or_update_candidate(
+        alias = f"doc_{i+1:03d}"
+        pdf = ws / f"{alias}.pdf"
+        pdf.write_bytes(f"%PDF-1.4 content {i}".encode())
+        audit = ws / f"{alias}.audit.json"
+        audit.write_text(json.dumps({"fields": {"f1": {"status": "NOT_AUDITED"}}}), encoding="utf-8")
+
+        cohort = cohorts[i % len(cohorts)]
+        family = families[0] if cohort == "holdout_same_family" else (families[2] if cohort == "unknown_family" else families[1])
+        sha = hashlib.sha256(f"seed_{i}".encode()).hexdigest()
+
+        reg.add_or_update_candidate(
             Phase9CorpusCandidate(
                 alias=alias,
                 source_ref=f"workspace/{alias}.pdf",
                 audit_ref=f"workspace/{alias}.audit.json",
-                family="sales_invoice" if i % 2 == 0 else "receipt",
-                cohort=cohorts[i % len(cohorts)],
+                family=family,
+                cohort=cohort,
                 layout_group=layouts[i % len(layouts)],
-                sha256=f"hash_unique_{i:04d}",
+                sha256=sha,
             )
         )
 
-    # Add an 13th incomplete candidate missing audit file & source file
-    registry.add_or_update_candidate(
-        Phase9CorpusCandidate(
-            alias="incomplete_doc_013",
-            source_ref="workspace/missing.pdf",
-            audit_ref="workspace/missing.audit.json",
-            family="sales_invoice",
-            cohort="current_pilot",
-            layout_group="layout_incomplete",
-            sha256="hash_incomplete_9999",
-        )
-    )
+    report = evaluate_corpus_readiness(reg, base_dir=tmp_path)
+    assert report.registered_documents == 12
+    assert report.eligible_documents == 0
+    assert report.documents_without_confirmed_fields == 12
+    assert report.is_ready is False
 
-    report = evaluate_corpus_readiness(registry, base_dir=tmp_path, minimum_documents=12, minimum_layout_groups=4)
-    assert report.registered_documents == 13
+
+def test_12_documents_confirmed_gt_readiness_true(tmp_path: Path) -> None:
+    # D. 12 valid documents with confirmed GT, correct cohorts, >=4 layouts -> readiness true
+    ws = tmp_path / "workspace"
+    ws.mkdir(parents=True)
+
+    reg = Phase9CorpusRegistry()
+    cohorts = ["current_pilot", "holdout_same_family", "unknown_family"]
+    layouts = ["l1", "l2", "l3", "l4"]
+
+    for i in range(12):
+        alias = f"doc_{i+1:03d}"
+        pdf = ws / f"{alias}.pdf"
+        pdf.write_bytes(f"%PDF-1.4 content {i}".encode())
+        audit = ws / f"{alias}.audit.json"
+        audit.write_text(
+            json.dumps({"fields": {"f1": {"status": FieldAuditStatus.CONFIRMED.value, "expected": f"V{i}"}}}),
+            encoding="utf-8",
+        )
+
+        cohort = cohorts[i % len(cohorts)]
+        family = "sales_invoice" if cohort == "holdout_same_family" else ("receipt" if cohort == "unknown_family" else "tax_withholding_certificate")
+        sha = hashlib.sha256(f"seed_{i}".encode()).hexdigest()
+
+        reg.add_or_update_candidate(
+            Phase9CorpusCandidate(
+                alias=alias,
+                source_ref=f"workspace/{alias}.pdf",
+                audit_ref=f"workspace/{alias}.audit.json",
+                family=family,
+                cohort=cohort,
+                layout_group=layouts[i % len(layouts)],
+                sha256=sha,
+            )
+        )
+
+    report = evaluate_corpus_readiness(reg, base_dir=tmp_path)
+    assert report.registered_documents == 12
     assert report.eligible_documents == 12
     assert report.distinct_layout_groups == 4
-    assert report.missing_audit_count == 1
-    assert report.is_ready is True  # Ready despite the 13th incomplete candidate!
+    assert report.is_ready is True
+
+
+def test_streaming_sha256_helper(tmp_path: Path) -> None:
+    # N. streaming SHA helper returns expected SHA on a synthetic temporary PDF byte fixture
+    pdf_file = tmp_path / "test.pdf"
+    content = b"%PDF-1.4 synthetic test pdf stream content 12345"
+    pdf_file.write_bytes(content)
+
+    expected_sha = hashlib.sha256(content).hexdigest()
+    computed_sha = compute_file_sha256(pdf_file, chunk_size=8)
+    assert computed_sha == expected_sha

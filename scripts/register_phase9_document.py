@@ -1,7 +1,6 @@
 """CLI tool to register a private PDF into the Phase 9 corpus registry safely."""
 
 import argparse
-import hashlib
 import sys
 from pathlib import Path
 
@@ -11,7 +10,9 @@ from document_engine.core.models import DocumentFamilyType, PDFProfileType
 from document_engine.evaluation.phase9_corpus import (
     Phase9CorpusCandidate,
     Phase9CorpusRegistry,
+    compute_file_sha256,
     count_audit_confirmed_fields,
+    is_cohort_family_compatible,
 )
 
 
@@ -73,6 +74,10 @@ def main() -> int:
             print("ERROR: INVALID_PROFILE_TYPE")
             return 1
 
+    if not is_cohort_family_compatible(args.cohort, args.family):
+        print("ERROR: COHORT_FAMILY_MISMATCH")
+        return 1
+
     source_path = Path(args.source)
     if not source_path.exists() or not source_path.is_file():
         print("ERROR: SOURCE_NOT_FOUND")
@@ -86,9 +91,8 @@ def main() -> int:
         print("ERROR: HOLDOUT_TUNING_REJECTED")
         return 1
 
-    # Calculate SHA256
-    pdf_bytes = source_path.read_bytes()
-    sha256_hash = hashlib.sha256(pdf_bytes).hexdigest()
+    # Calculate SHA256 using chunked/streaming read
+    sha256_hash = compute_file_sha256(source_path)
 
     registry_path = Path(args.registry)
     registry = Phase9CorpusRegistry.load_yaml(registry_path)

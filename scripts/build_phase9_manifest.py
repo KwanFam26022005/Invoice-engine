@@ -9,7 +9,7 @@ import yaml
 from document_engine.evaluation.phase9_contract import Phase9EvaluationContract, Phase9Manifest
 from document_engine.evaluation.phase9_corpus import (
     Phase9CorpusRegistry,
-    evaluate_corpus_readiness,
+    select_evaluation_ready_candidates,
 )
 
 
@@ -61,7 +61,9 @@ def main() -> int:
         return 1
 
     registry = Phase9CorpusRegistry.load_yaml(registry_path)
-    report = evaluate_corpus_readiness(
+
+    # Use shared evaluation-ready candidate selector
+    eligible_candidates, report = select_evaluation_ready_candidates(
         registry,
         base_dir=Path("."),
         minimum_documents=min_docs,
@@ -75,47 +77,30 @@ def main() -> int:
         print(f"holdout_same_family_count: {report.holdout_same_family_count}")
         print(f"unknown_family_count: {report.unknown_family_count}")
         print(f"distinct_layout_groups: {report.distinct_layout_groups} (minimum required: {min_layouts})")
+        print(f"documents_with_audit: {report.documents_with_audit}")
+        print(f"documents_with_confirmed_audit: {report.documents_with_confirmed_audit}")
+        print(f"documents_without_confirmed_fields: {report.documents_without_confirmed_fields}")
         print(f"missing_audit_count: {report.missing_audit_count}")
         print(f"missing_family_count: {report.missing_family_count}")
         print(f"missing_layout_group_count: {report.missing_layout_group_count}")
+        print(f"cohort_family_mismatch_count: {report.cohort_family_mismatch_count}")
         print(f"duplicate_count: {report.duplicate_count}")
         return 1
 
-    # Filter eligible candidates for manifest
+    # Format evaluation-ready candidates into manifest document entries
     documents_list = []
-    seen_shas = set()
-
-    for cand in registry.candidates:
-        sha_lower = cand.sha256.lower()
-        if sha_lower in seen_shas:
-            continue
-
-        source_path = Path(cand.source_ref)
-        audit_path = Path(cand.audit_ref) if cand.audit_ref else None
-
-        # Holdout check
-        if cand.cohort == "holdout_same_family" and cand.used_for_prior_tuning:
-            continue
-
-        if (
-            source_path.exists()
-            and audit_path
-            and audit_path.exists()
-            and cand.family
-            and cand.layout_group
-        ):
-            seen_shas.add(sha_lower)
-            doc_entry = {
-                "alias": cand.alias,
-                "family": cand.family,
-                "cohort": cand.cohort,
-                "layout_group": cand.layout_group,
-                "source_ref": str(cand.source_ref).replace("\\", "/"),
-                "audit_ref": str(cand.audit_ref).replace("\\", "/"),
-            }
-            if cand.expected_profile:
-                doc_entry["expected_profile"] = cand.expected_profile
-            documents_list.append(doc_entry)
+    for cand in eligible_candidates:
+        doc_entry = {
+            "alias": cand.alias,
+            "family": cand.family,
+            "cohort": cand.cohort,
+            "layout_group": cand.layout_group,
+            "source_ref": str(cand.source_ref).replace("\\", "/"),
+            "audit_ref": str(cand.audit_ref).replace("\\", "/"),
+        }
+        if cand.expected_profile:
+            doc_entry["expected_profile"] = cand.expected_profile
+        documents_list.append(doc_entry)
 
     manifest_data = {
         "manifest_version": "1.0",
