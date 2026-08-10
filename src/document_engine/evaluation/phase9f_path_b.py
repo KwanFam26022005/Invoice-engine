@@ -208,13 +208,18 @@ def execute_phase9f_path_b_observation(
     extractor: Optional[SemanticExtractor] = None,
     grounder: Optional[EvidenceGrounder] = None,
     allow_heavy_execution: bool = False,
+    semantic_timeout_seconds: float = 180.0,
 ) -> tuple[Phase9FDocumentObservation, Dict[str, Any]]:
     """Execute one controlled Path B observation.
 
     When ``extractor`` is omitted, real Docling/NuExtract inference is blocked unless
     ``allow_heavy_execution=True`` is supplied by an explicit manual-terminal runner.
     Injected extractors are intended for unit tests and do not trigger the heavy gate.
+    ``semantic_timeout_seconds`` controls only the real isolated semantic worker budget.
     """
+
+    if semantic_timeout_seconds <= 0:
+        raise ValueError("semantic_timeout_seconds must be greater than zero.")
 
     prepared = _prepare_path_b(alias, repo_root, manifest_path)
     eligibility = prepared.eligibility
@@ -225,12 +230,13 @@ def execute_phase9f_path_b_observation(
     predicted_family = prepared.classification.document_family
     schema_spec = get_semantic_schema(predicted_family)
 
+    real_extractor = extractor is None
     if extractor is None:
         if not allow_heavy_execution:
             raise RuntimeError("MANUAL_TERMINAL_TASK_REQUIRED")
         from document_engine.semantic.extractors.docling_semantic import DoclingSemanticExtractor
 
-        extractor = DoclingSemanticExtractor()
+        extractor = DoclingSemanticExtractor(timeout=semantic_timeout_seconds)
 
     request = SemanticExtractionRequest(
         document_id=prepared.document_ir.document_id,
@@ -366,6 +372,7 @@ def execute_phase9f_path_b_observation(
         "grounded_count": grounding_report.grounded_count,
         "unsupported_count": grounding_report.unsupported_count,
         "abstained_count": len(semantic_result.abstained_fields),
+        "semantic_timeout_seconds": semantic_timeout_seconds if real_extractor else None,
         "audit_loaded_after_inference": True,
         "schema_condition_source": "frozen_classifier_output",
         "oracle_family_used_for_execution": False,
