@@ -6,11 +6,23 @@ import json
 import os
 from pathlib import Path
 import sys
+import time
 
 
 WEIGHT_SUFFIXES = {".safetensors", ".bin", ".pt", ".onnx"}
 DEFAULT_MODEL_REPO_ID = "numind/NuExtract-2.0-2B"
 DEFAULT_MODEL_REVISION = "fe5b2f0b63b81150721435a3ca1129a75c59c74e"
+
+
+def _emit_stage(stage: str, started_at: float) -> None:
+    """Emit a privacy-safe progress marker on stderr for timeout diagnostics."""
+
+    elapsed = time.perf_counter() - started_at
+    print(
+        f"SEMANTIC_STAGE stage={stage} elapsed_seconds={elapsed:.3f}",
+        file=sys.stderr,
+        flush=True,
+    )
 
 
 def runtime_versions() -> dict:
@@ -189,16 +201,19 @@ def safe_error_response(req_id: str, code: str, versions: dict) -> dict:
 
 
 def main() -> None:
+    started_at = time.perf_counter()
     raw_input = sys.stdin.read()
     if not raw_input.strip():
         sys.exit(1)
 
     request = json.loads(raw_input)
+    _emit_stage("request_received", started_at)
     req_id = request.get("request_id", "req_unknown")
     operation = request.get("operation", "healthcheck")
     options = request.get("options", {}) or {}
     allow_model_download = bool(request.get("allow_model_download", False))
     versions = runtime_versions()
+    _emit_stage("runtime_versions_ready", started_at)
 
     if not allow_model_download:
         os.environ.setdefault("HF_HUB_OFFLINE", "1")
@@ -208,6 +223,7 @@ def main() -> None:
     model_path = artifacts_path(options)
     cache_ok = artifacts_ready(model_path)
     runtime_config = semantic_runtime_config(options)
+    _emit_stage("preflight_ready", started_at)
 
     if operation == "healthcheck":
         offline_ready = (
@@ -242,6 +258,7 @@ def main() -> None:
                 "model_revision": runtime_config["model_revision"],
             },
         }
+        _emit_stage("healthcheck_response_ready", started_at)
         print(json.dumps(response), flush=True)
         return
 
@@ -278,14 +295,17 @@ def main() -> None:
     if not isinstance(template, dict) or not family or not schema_name:
         print(json.dumps(safe_error_response(req_id, "INVALID_SEMANTIC_TEMPLATE", versions)), flush=True)
         return
+    _emit_stage("input_validated", started_at)
 
     try:
+        _emit_stage("heavy_imports_start", started_at)
         from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
         from docling.datamodel.accelerator_options import AcceleratorOptions
         from docling.datamodel.base_models import InputFormat
         from docling.datamodel.pipeline_options import VlmExtractionPipelineOptions
         from docling.document_extractor import DocumentExtractor, ExtractionFormatOption
         from docling.pipeline.extraction_vlm_pipeline import ExtractionVlmPipeline
+        _emit_stage("heavy_imports_ready", started_at)
 
         accelerator_options = AcceleratorOptions(
             device=runtime_config["actual_device"],
@@ -313,15 +333,22 @@ def main() -> None:
             backend=PyPdfiumDocumentBackend,
             pipeline_options=pipeline_options,
         )
+        _emit_stage("pipeline_options_ready", started_at)
+
+        _emit_stage("extractor_init_start", started_at)
         extractor = DocumentExtractor(
             allowed_formats=[InputFormat.PDF],
             extraction_format_options={InputFormat.PDF: format_option},
         )
+        _emit_stage("extractor_initialized", started_at)
+
+        _emit_stage("extraction_started", started_at)
         result = extractor.extract(
             source=input_path,
             template=template,
             raises_on_error=False,
         )
+        _emit_stage("extraction_finished", started_at)
 
         candidates = []
         abstained_fields = []
@@ -379,8 +406,10 @@ def main() -> None:
             "runtime_versions": versions,
             "semantic_result_dict": semantic_result,
         }
+        _emit_stage("response_ready", started_at)
         print(json.dumps(response), flush=True)
     except Exception as exc:
+        _emit_stage("exception_response_ready", started_at)
         print(
             json.dumps(
                 safe_error_response(
