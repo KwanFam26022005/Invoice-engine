@@ -102,9 +102,30 @@ def create_paddleocr_vl_pipeline(options: dict):
     return PaddleOCRVL(**kwargs)
 
 
+def _safe_int(value, fallback: int) -> int:
+    """Safely convert value to int, returning fallback if None or invalid."""
+    if value is None:
+        return fallback
+    try:
+        val = int(value)
+        return val
+    except (TypeError, ValueError):
+        return fallback
+
+
 def _geometry_from_bbox(bbox, width, height) -> dict | None:
-    if not bbox or not isinstance(bbox, (list, tuple)) or len(bbox) < 4:
+    if bbox is None:
         return None
+
+    if hasattr(bbox, "tolist"):
+        try:
+            bbox = bbox.tolist()
+        except Exception:
+            return None
+
+    if not isinstance(bbox, (list, tuple)) or len(bbox) < 4:
+        return None
+
     try:
         if isinstance(bbox[0], (list, tuple)):
             xs = [float(point[0]) for point in bbox]
@@ -166,8 +187,18 @@ def build_page_ir_from_paddle(res_item, page_num: int, doc_id: str) -> dict:
             label_str = str(
                 item.get("block_label", item.get("type", item.get("label", "text")))
             ).lower()
-            order_val = item.get("block_order", item.get("reading_order", idx))
-            block_id = str(item.get("block_id", f"{page_id}_b{idx:05d}"))
+
+            raw_order = item.get("block_order")
+            if raw_order is None:
+                raw_order = item.get("reading_order")
+            reading_order = _safe_int(raw_order, fallback=idx)
+
+            raw_block_id = item.get("block_id")
+            if raw_block_id is None or raw_block_id == "":
+                block_id = f"{page_id}_b{idx:05d}"
+            else:
+                block_id = str(raw_block_id)
+
             block_bbox = item.get("block_bbox", item.get("bbox", item.get("poly")))
             block_geometry = _geometry_from_bbox(block_bbox, width, height)
 
@@ -177,11 +208,15 @@ def build_page_ir_from_paddle(res_item, page_num: int, doc_id: str) -> dict:
                     cells_data = []
                     max_r, max_c = 0, 0
                     table_id = f"{page_id}_t{table_idx:03d}"
+                    cell_idx = 0
                     for cell_raw in cells_raw:
                         if not isinstance(cell_raw, dict):
                             continue
-                        row_index = int(cell_raw.get("row_index", 0))
-                        col_index = int(cell_raw.get("col_index", 0))
+                        row_index = _safe_int(cell_raw.get("row_index"), fallback=cell_idx)
+                        col_index = _safe_int(cell_raw.get("col_index"), fallback=0)
+                        if row_index < 0:
+                            row_index = cell_idx
+                        col_index = max(col_index, 0)
                         max_r = max(max_r, row_index + 1)
                         max_c = max(max_c, col_index + 1)
                         cell_bbox = cell_raw.get(
@@ -196,6 +231,7 @@ def build_page_ir_from_paddle(res_item, page_num: int, doc_id: str) -> dict:
                                 "geometry": _geometry_from_bbox(cell_bbox, width, height),
                             }
                         )
+                        cell_idx += 1
                     tables.append(
                         {
                             "table_id": table_id,
@@ -216,7 +252,7 @@ def build_page_ir_from_paddle(res_item, page_num: int, doc_id: str) -> dict:
                         "page_number": page_num,
                         "block_type": label_str,
                         "text": content_str,
-                        "reading_order": int(order_val),
+                        "reading_order": reading_order,
                         "geometry": block_geometry,
                     }
                 )
@@ -232,7 +268,14 @@ def build_page_ir_from_paddle(res_item, page_num: int, doc_id: str) -> dict:
     }
 
 
-def _safe_error(req_id: str, parser_id: str, versions: dict, code: str, message: str) -> dict:
+def _safe_error(
+    req_id: str,
+    parser_id: str,
+    versions: dict,
+    code: str,
+    message: str,
+    stage: str = "unknown",
+) -> dict:
     return {
         "request_id": req_id,
         "success": False,
@@ -241,12 +284,14 @@ def _safe_error(req_id: str, parser_id: str, versions: dict, code: str, message:
         "runtime_versions": versions,
         "error_type": code,
         "error_message": message,
+        "error_stage": stage,
     }
 
 
 def main():
     start_time = time.time()
     req_data = {}
+    current_stage = "bootstrap"
     try:
         raw_input = sys.stdin.read()
         if not raw_input.strip():
@@ -265,6 +310,7 @@ def main():
             os.getenv("ALLOW_MODEL_DOWNLOAD") == "1"
         )
 
+        current_stage = "runtime_readiness"
         versions = get_runtime_versions()
         has_paddle = importlib.util.find_spec("paddle") is not None
         has_paddleocr = importlib.util.find_spec("paddleocr") is not None
@@ -323,6 +369,7 @@ def main():
                         versions,
                         "UNSUPPORTED_WORKER_OPERATION",
                         f"Unsupported PaddleOCR-VL worker operation: {operation}",
+                        stage=current_stage,
                     )
                 ),
                 flush=True,
@@ -338,6 +385,7 @@ def main():
                         versions,
                         "PARSER_UNAVAILABLE",
                         "Paddle / PaddleOCR unavailable or PaddleOCRVL is not importable.",
+                        stage=current_stage,
                     )
                 ),
                 flush=True,
@@ -353,6 +401,7 @@ def main():
                         versions,
                         "REMOTE_BACKEND_REJECTED",
                         "Phase 9E permits only the local/native PaddleOCR-VL backend.",
+                        stage=current_stage,
                     )
                 ),
                 flush=True,
@@ -368,6 +417,7 @@ def main():
                         versions,
                         "PADDLEOCR_VL_CACHE_NOT_READY",
                         f"Explicit PaddleOCR-VL model directories are not ready ({cache_status}).",
+                        stage=current_stage,
                     )
                 ),
                 flush=True,
@@ -384,13 +434,17 @@ def main():
                         versions,
                         "INVALID_PADDLEOCR_VL_INPUT",
                         "PaddleOCR-VL canary input must be an existing PDF.",
+                        stage=current_stage,
                     )
                 ),
                 flush=True,
             )
             return
 
+        current_stage = "pipeline_init"
         pipeline = create_paddleocr_vl_pipeline(options)
+
+        current_stage = "inference"
         predict_iter = getattr(pipeline, "predict_iter", None)
         if callable(predict_iter):
             raw_output = predict_iter(input=str(input_file))
@@ -407,16 +461,20 @@ def main():
                         versions,
                         "PARSER_EMPTY_OUTPUT",
                         "PaddleOCR-VL returned no page results.",
+                        stage=current_stage,
                     )
                 ),
                 flush=True,
             )
             return
 
+        current_stage = "ir_mapping"
         pages = [
             build_page_ir_from_paddle(result_item, page_index + 1, doc_id)
             for page_index, result_item in enumerate(results)
         ]
+
+        current_stage = "response_build"
         elapsed = time.time() - start_time
         doc_ir_dict = {
             "document_id": doc_id,
@@ -458,7 +516,7 @@ def main():
         print(json.dumps(response), flush=True)
 
     except Exception as exc:
-        logger.exception("PaddleOCR-VL worker error")
+        logger.exception("PaddleOCR-VL worker error during %s", current_stage)
         versions = get_runtime_versions()
         req_id = req_data.get("request_id", "req_unknown")
         parser_id = req_data.get("parser_id", "paddleocr_vl")
@@ -469,7 +527,8 @@ def main():
                     parser_id,
                     versions,
                     f"PADDLEOCR_VL_{type(exc).__name__.upper()}",
-                    f"PaddleOCR-VL worker failed: {type(exc).__name__}",
+                    f"PaddleOCR-VL worker failed during {current_stage}: {type(exc).__name__}",
+                    stage=current_stage,
                 )
             ),
             flush=True,

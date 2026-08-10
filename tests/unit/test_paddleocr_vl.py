@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 from document_engine.ir.models import BlockIR
 from document_engine.parsers.paddleocr_vl import PaddleOCRVLParser
 from document_engine.workers.paddleocr_vl_worker import (
+    _safe_error,
     build_page_ir_from_paddle,
     check_model_cache_status,
     create_paddleocr_vl_pipeline,
@@ -421,3 +422,151 @@ def test_check_model_cache_status_one_valid_one_empty(tmp_path):
     )
     assert status == "LOCAL_MODEL_DIRS_PARTIALLY_VERIFIED"
     assert ready is False
+
+
+def test_paddleocr_vl_none_block_order_regression():
+    fake_res = FakePaddleResultItem(
+        {
+            "res": {
+                "width": 600.0,
+                "height": 800.0,
+                "parsing_res_list": [
+                    {
+                        "block_id": 1,
+                        "block_label": "text",
+                        "block_content": "Synthetic A",
+                        "block_order": None,
+                        "block_bbox": [10, 20, 100, 40],
+                    },
+                    {
+                        "block_id": 2,
+                        "block_label": "text",
+                        "block_content": "Synthetic B",
+                        "block_order": 5,
+                        "block_bbox": [10, 50, 100, 70],
+                    },
+                ],
+            }
+        }
+    )
+
+    page = build_page_ir_from_paddle(fake_res, page_num=1, doc_id="doc_none_order")
+    blocks = page["blocks"]
+    assert len(blocks) == 2
+    assert blocks[0]["text"] == "Synthetic A"
+    assert blocks[0]["reading_order"] == 0
+    assert blocks[0]["block_id"] == "1"
+    assert blocks[1]["text"] == "Synthetic B"
+    assert blocks[1]["reading_order"] == 5
+    assert blocks[1]["block_id"] == "2"
+
+
+class FakeArray:
+    def __init__(self, values):
+        self.values = values
+
+    def tolist(self):
+        return self.values
+
+
+def test_paddleocr_vl_numpy_like_bbox_regression():
+    fake_res = FakePaddleResultItem(
+        {
+            "res": {
+                "width": 800.0,
+                "height": 1000.0,
+                "parsing_res_list": [
+                    {
+                        "block_id": "b1",
+                        "block_label": "text",
+                        "block_content": "Numpy Bbox Text",
+                        "block_order": 0,
+                        "block_bbox": FakeArray([10, 20, 300, 50]),
+                    },
+                    {
+                        "block_id": "b2",
+                        "block_label": "text",
+                        "block_content": "Quad Bbox Text",
+                        "block_order": 1,
+                        "block_bbox": [
+                            [10, 20],
+                            [300, 20],
+                            [300, 50],
+                            [10, 50],
+                        ],
+                    },
+                ],
+            }
+        }
+    )
+
+    page = build_page_ir_from_paddle(fake_res, page_num=1, doc_id="doc_numpy")
+    blocks = page["blocks"]
+    assert blocks[0]["geometry"]["bbox"] == [10.0, 20.0, 300.0, 50.0]
+    assert blocks[0]["geometry"]["coordinate_system"] == "image_pixels_topleft"
+    assert blocks[1]["geometry"]["bbox"] == [10.0, 20.0, 300.0, 50.0]
+
+
+def test_paddleocr_vl_none_table_cell_and_block_id_regression():
+    fake_res = FakePaddleResultItem(
+        {
+            "res": {
+                "width": 800.0,
+                "height": 1000.0,
+                "parsing_res_list": [
+                    {
+                        "block_id": None,
+                        "block_label": "table",
+                        "block_content": "Cell A | Cell B",
+                        "block_order": None,
+                        "block_bbox": [100, 200, 700, 500],
+                        "table_cells": [
+                            {
+                                "row_index": None,
+                                "col_index": None,
+                                "text": "Cell A",
+                                "bbox": [100, 200, 400, 250],
+                            },
+                            {
+                                "row_index": "invalid",
+                                "col_index": -1,
+                                "text": "Cell B",
+                                "bbox": [400, 200, 700, 250],
+                            },
+                        ],
+                    }
+                ],
+            }
+        }
+    )
+
+    page = build_page_ir_from_paddle(fake_res, page_num=1, doc_id="doc_none_cell")
+    assert len(page["blocks"]) == 1
+    assert page["blocks"][0]["block_id"] == "doc_none_cell_p0001_b00000"
+    assert page["blocks"][0]["block_id"] != "None"
+
+    assert len(page["tables"]) == 1
+    cells = page["tables"][0]["cells"]
+    assert len(cells) == 2
+    assert cells[0]["row_index"] == 0
+    assert cells[0]["col_index"] == 0
+    assert cells[1]["row_index"] == 1
+    assert cells[1]["col_index"] == 0
+
+
+def test_paddleocr_vl_privacy_safe_stage_diagnostic():
+    err = _safe_error(
+        req_id="req_test",
+        parser_id="paddleocr_vl",
+        versions={"paddleocr": "3.7.0"},
+        code="PADDLEOCR_VL_TYPEERROR",
+        message="PaddleOCR-VL worker failed during ir_mapping: TypeError",
+        stage="ir_mapping",
+    )
+
+    assert err["error_type"] == "PADDLEOCR_VL_TYPEERROR"
+    assert err["error_message"] == "PaddleOCR-VL worker failed during ir_mapping: TypeError"
+    assert "error_stage" in err
+    assert err["error_stage"] == "ir_mapping"
+    assert "invoice" not in err["error_message"].lower()
+    assert "secret" not in err["error_message"].lower()
