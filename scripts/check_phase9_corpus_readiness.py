@@ -30,6 +30,11 @@ def main() -> int:
     min_docs = 12
     min_layouts = 4
     contract_path = Path(args.contract)
+    if not contract_path.exists():
+        fallback = Path(__file__).resolve().parents[1] / args.contract
+        if fallback.exists():
+            contract_path = fallback
+
     if contract_path.exists():
         contract_data = yaml.safe_load(contract_path.read_text(encoding="utf-8")) or {}
         min_docs = contract_data.get("minimum_documents", 12)
@@ -37,7 +42,7 @@ def main() -> int:
 
     registry_path = Path(args.registry)
     if not registry_path.exists():
-        print(f"CORPUS_REGISTRY_MISSING: {args.registry}")
+        print("ERROR: REGISTRY_NOT_FOUND")
         print("VERDICT: PHASE_9F_CORPUS_PREPARATION_REQUIRED")
         return 1
 
@@ -58,6 +63,7 @@ def main() -> int:
     print(f"distinct_layout_groups: {report.distinct_layout_groups}")
     print(f"documents_with_audit: {report.documents_with_audit}")
     print(f"documents_with_confirmed_audit: {report.documents_with_confirmed_audit}")
+    print(f"documents_without_confirmed_fields: {report.documents_without_confirmed_fields}")
     print(f"missing_audit_count: {report.missing_audit_count}")
     print(f"missing_family_count: {report.missing_family_count}")
     print(f"missing_layout_group_count: {report.missing_layout_group_count}")

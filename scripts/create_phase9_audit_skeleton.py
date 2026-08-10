@@ -1,48 +1,47 @@
-"""CLI tool to create a private audit JSON skeleton with NOT_AUDITED status and null expected values."""
+"""CLI tool to create a private audit JSON skeleton with NOT_AUDITED status derived from schema_registry.py."""
 
 import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Any, List
 
-CANONICAL_FAMILY_FIELDS = {
-    "sales_invoice": [
-        "common.document_number",
-        "common.document_date",
-        "common.supplier_name",
-        "common.supplier_tax_id",
-        "common.customer_name",
-        "common.customer_tax_id",
-        "common.total_amount",
-        "common.tax_amount",
-        "common.net_amount",
-        "common.currency",
-    ],
-    "utility_consumption_invoice": [
-        "common.document_number",
-        "common.document_date",
-        "common.supplier_name",
-        "common.customer_name",
-        "common.total_amount",
-        "common.tax_amount",
-        "utility.meter_number",
-        "utility.consumption_kwh",
-        "utility.billing_period_start",
-        "utility.billing_period_end",
-    ],
-    "tax_withholding_certificate": [
-        "common.document_number",
-        "common.document_date",
-        "common.supplier_name",
-        "common.supplier_tax_id",
-        "common.customer_name",
-        "common.customer_tax_id",
-        "common.total_amount",
-        "tax.withheld_amount",
-        "tax.income_type",
-        "tax.tax_rate",
-    ],
-}
+from document_engine.core.models import DocumentFamilyType
+from document_engine.semantic.schema_registry import get_semantic_schema, supports_semantic_schema
+
+
+def flatten_template(data: Any, prefix: str = "") -> List[str]:
+    """Recursively extract scalar field paths from a semantic schema template.
+
+    List fields (e.g. line_items, meter_readings, pricing_tiers) are skipped
+    to prevent fabricating arbitrary row indices in ground-truth skeletons.
+    """
+    paths: List[str] = []
+    if isinstance(data, dict):
+        for k, v in data.items():
+            new_prefix = f"{prefix}.{k}" if prefix else k
+            if isinstance(v, dict):
+                paths.extend(flatten_template(v, new_prefix))
+            elif isinstance(v, list):
+                # Scalar skeleton strategy: omit list row index fabrication
+                pass
+            else:
+                paths.append(new_prefix)
+    return paths
+
+
+def derive_canonical_field_paths(family: str) -> List[str]:
+    """Derive canonical scalar field paths from schema_registry.py."""
+    try:
+        family_enum = DocumentFamilyType(family)
+    except ValueError:
+        return []
+
+    if not supports_semantic_schema(family_enum):
+        return []
+
+    spec = get_semantic_schema(family_enum)
+    return flatten_template(spec.template)
 
 
 def main() -> int:
@@ -53,11 +52,18 @@ def main() -> int:
 
     args = parser.parse_args()
 
-    field_names = CANONICAL_FAMILY_FIELDS.get(args.family, [])
+    # Validate DocumentFamilyType
+    try:
+        DocumentFamilyType(args.family)
+    except ValueError:
+        print("ERROR: INVALID_FAMILY_TYPE")
+        return 1
+
+    field_paths = derive_canonical_field_paths(args.family)
     fields_dict = {}
 
-    for field_name in field_names:
-        fields_dict[field_name] = {
+    for field_path in field_paths:
+        fields_dict[field_path] = {
             "expected": None,
             "status": "NOT_AUDITED",
             "notes": None,
@@ -73,7 +79,7 @@ def main() -> int:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(audit_data, indent=2), encoding="utf-8")
 
-    print(f"AUDIT_SKELETON_CREATED: alias={args.alias}, family={args.family}, field_count={len(fields_dict)}")
+    print(f"AUDIT_SKELETON_CREATED: alias={args.alias}, field_count={len(fields_dict)}")
     return 0
 
 

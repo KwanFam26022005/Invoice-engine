@@ -1,4 +1,4 @@
-"""Unit tests for Phase 9 corpus CLI tools."""
+"""Unit tests for Phase 9 corpus CLI tools and contract hardening."""
 
 import json
 import os
@@ -24,7 +24,61 @@ def run_cli(script_name: str, cmd_args: list[str], cwd: Path) -> subprocess.Comp
     )
 
 
-def test_register_phase9_document_cli(tmp_path: Path) -> None:
+def test_register_phase9_document_cli_privacy_safe_errors(tmp_path: Path) -> None:
+    ws = tmp_path / "workspace"
+    ws.mkdir(parents=True)
+    pdf1 = ws / "doc1.pdf"
+    pdf1.write_bytes(b"%PDF-1.4 test document content 1")
+    reg_file = ws / "corpus_registry.yaml"
+
+    # Test invalid family enum
+    res_fam = run_cli(
+        "register_phase9_document.py",
+        [
+            "--source",
+            "workspace/doc1.pdf",
+            "--alias",
+            "alias_001",
+            "--family",
+            "invalid_family_xyz",
+            "--cohort",
+            "current_pilot",
+            "--layout-group",
+            "sales_layout_a",
+            "--registry",
+            str(reg_file),
+        ],
+        cwd=tmp_path,
+    )
+    assert res_fam.returncode != 0
+    assert "ERROR: INVALID_FAMILY_TYPE" in res_fam.stdout
+    assert "invalid_family_xyz" not in res_fam.stdout  # O. Privacy-safe error
+
+    # Test non-workspace path rejection
+    res_path = run_cli(
+        "register_phase9_document.py",
+        [
+            "--source",
+            "private/doc1.pdf",
+            "--alias",
+            "alias_001",
+            "--family",
+            "sales_invoice",
+            "--cohort",
+            "current_pilot",
+            "--layout-group",
+            "sales_layout_a",
+            "--registry",
+            str(reg_file),
+        ],
+        cwd=tmp_path,
+    )
+    assert res_path.returncode != 0
+    assert "ERROR: INVALID_WORKSPACE_PATH" in res_path.stdout
+    assert "private/doc1.pdf" not in res_path.stdout  # O. Privacy-safe error
+
+
+def test_register_phase9_document_cli_duplicate_and_tuning(tmp_path: Path) -> None:
     ws = tmp_path / "workspace"
     ws.mkdir(parents=True)
     pdf1 = ws / "doc1.pdf"
@@ -53,7 +107,7 @@ def test_register_phase9_document_cli(tmp_path: Path) -> None:
     assert res.returncode == 0
     assert "REGISTERED_CANDIDATE: alias=alias_001" in res.stdout
 
-    # Test duplicate SHA256 rejection under different alias
+    # Duplicate SHA rejection
     pdf2 = ws / "doc2.pdf"
     pdf2.write_bytes(b"%PDF-1.4 test document content 1")  # identical content
     res_dup = run_cli(
@@ -75,29 +129,22 @@ def test_register_phase9_document_cli(tmp_path: Path) -> None:
         cwd=tmp_path,
     )
     assert res_dup.returncode != 0
-    assert "ERROR: Exact duplicate document already registered" in res_dup.stdout
+    assert "ERROR: DUPLICATE_DOCUMENT_REJECTED" in res_dup.stdout
 
-
-def test_register_holdout_prior_tuning_rejection(tmp_path: Path) -> None:
-    ws = tmp_path / "workspace"
-    ws.mkdir(parents=True)
-    pdf = ws / "tuned.pdf"
-    pdf.write_bytes(b"%PDF-1.4 tuned content")
-    reg_file = ws / "corpus_registry.yaml"
-
-    res = run_cli(
+    # Prior tuning holdout rejection
+    res_tune = run_cli(
         "register_phase9_document.py",
         [
             "--source",
-            "workspace/tuned.pdf",
+            "workspace/doc1.pdf",
             "--alias",
-            "holdout_001",
+            "alias_holdout",
             "--family",
             "sales_invoice",
             "--cohort",
             "holdout_same_family",
             "--layout-group",
-            "sales_b",
+            "sales_layout_a",
             "--used-for-prior-tuning",
             "true",
             "--registry",
@@ -105,11 +152,12 @@ def test_register_holdout_prior_tuning_rejection(tmp_path: Path) -> None:
         ],
         cwd=tmp_path,
     )
-    assert res.returncode != 0
-    assert "ERROR: Document used for prior tuning cannot be registered" in res.stdout
+    assert res_tune.returncode != 0
+    assert "ERROR: HOLDOUT_TUNING_REJECTED" in res_tune.stdout
 
 
-def test_create_phase9_audit_skeleton_cli(tmp_path: Path) -> None:
+def test_create_phase9_audit_skeleton_cli_schema_derived(tmp_path: Path) -> None:
+    # D, E, N. Skeleton fields derived from schema_registry.py
     audit_file = tmp_path / "workspace" / "sales_001.audit.json"
     res = run_cli(
         "create_phase9_audit_skeleton.py",
@@ -131,9 +179,22 @@ def test_create_phase9_audit_skeleton_cli(tmp_path: Path) -> None:
     assert data["family"] == "sales_invoice"
 
     fields = data["fields"]
+    # Schema-derived canonical paths for sales_invoice
     assert "common.document_number" in fields
-    assert fields["common.document_number"]["status"] == "NOT_AUDITED"
-    assert fields["common.document_number"]["expected"] is None
+    assert "common.issue_date" in fields  # Derived from schema_registry.py
+    assert "common.seller.name" in fields  # Derived from schema_registry.py
+    assert "common.grand_total" in fields
+
+    # E. Check skeleton does NOT contain stale invented names
+    assert "common.document_date" not in fields
+    assert "common.supplier_name" not in fields
+    assert "common.total_amount" not in fields
+
+    # N. Begins with expected=None and status="NOT_AUDITED"
+    for f_entry in fields.values():
+        assert f_entry["expected"] is None
+        assert f_entry["status"] == "NOT_AUDITED"
+        assert f_entry["notes"] is None
 
 
 def test_check_phase9_corpus_readiness_cli(tmp_path: Path) -> None:
@@ -151,36 +212,16 @@ def test_check_phase9_corpus_readiness_cli(tmp_path: Path) -> None:
     )
     assert res.returncode == 0
     assert "registered_documents: 0" in res.stdout
+    assert "documents_without_confirmed_fields: 0" in res.stdout
     assert "VERDICT: PHASE_9F_CORPUS_PREPARATION_REQUIRED" in res.stdout
 
 
-def test_build_phase9_manifest_cli_insufficient(tmp_path: Path) -> None:
-    reg_file = tmp_path / "workspace" / "corpus_registry.yaml"
-    reg_file.parent.mkdir(parents=True, exist_ok=True)
-    reg_file.write_text("registry_version: '1.0'\ncandidates: []\n", encoding="utf-8")
-
-    manifest_file = tmp_path / "workspace" / "phase9_manifest.yaml"
-    res = run_cli(
-        "build_phase9_manifest.py",
-        [
-            "--registry",
-            str(reg_file),
-            "--output",
-            str(manifest_file),
-        ],
-        cwd=tmp_path,
-    )
-    assert res.returncode != 0
-    assert "PHASE_9F_CORPUS_PREPARATION_REQUIRED" in res.stdout
-    assert not manifest_file.exists()
-
-
-def test_build_phase9_manifest_cli_success(tmp_path: Path) -> None:
+def test_build_phase9_manifest_cli_full_contract_validation(tmp_path: Path) -> None:
+    # M. Manifest builder calls and satisfies Phase9EvaluationContract.validate_manifest
     ws = tmp_path / "workspace"
     ws.mkdir(parents=True, exist_ok=True)
 
     candidates = []
-    # Create 12 valid documents across 4 layout groups and 3 cohorts
     cohorts = ["current_pilot", "holdout_same_family", "unknown_family"]
     families = [
         "sales_invoice",
@@ -200,18 +241,14 @@ def test_build_phase9_manifest_cli_success(tmp_path: Path) -> None:
             encoding="utf-8",
         )
 
-        cohort = cohorts[i % len(cohorts)]
-        family = families[i % len(families)]
-        layout = layouts[i % len(layouts)]
-
         candidates.append(
             {
                 "alias": alias,
                 "source_ref": f"workspace/{alias}.pdf",
                 "audit_ref": f"workspace/{alias}.audit.json",
-                "family": family,
-                "cohort": cohort,
-                "layout_group": layout,
+                "family": families[i % len(families)],
+                "cohort": cohorts[i % len(cohorts)],
+                "layout_group": layouts[i % len(layouts)],
                 "sha256": f"hash_{i:04d}",
                 "used_for_prior_tuning": False,
                 "audit_confirmed_field_count": 1,

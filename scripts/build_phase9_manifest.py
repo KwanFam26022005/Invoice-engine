@@ -6,7 +6,7 @@ from pathlib import Path
 
 import yaml
 
-from document_engine.evaluation.phase9_contract import Phase9Manifest
+from document_engine.evaluation.phase9_contract import Phase9EvaluationContract, Phase9Manifest
 from document_engine.evaluation.phase9_corpus import (
     Phase9CorpusRegistry,
     evaluate_corpus_readiness,
@@ -34,19 +34,29 @@ def main() -> int:
     args = parser.parse_args()
 
     contract_path = Path(args.contract)
-    min_docs = 12
-    min_layouts = 4
-    frozen_revision = "2eb4b3f7695ef6693369d732a8520fe243269d7a"
+    if not contract_path.exists():
+        fallback = Path(__file__).resolve().parents[1] / args.contract
+        if fallback.exists():
+            contract_path = fallback
+        else:
+            print("ERROR: CONTRACT_NOT_FOUND")
+            print("PHASE_9F_CORPUS_PREPARATION_REQUIRED")
+            return 1
 
-    if contract_path.exists():
-        contract_data = yaml.safe_load(contract_path.read_text(encoding="utf-8")) or {}
-        min_docs = contract_data.get("minimum_documents", 12)
-        min_layouts = contract_data.get("minimum_layout_groups", 4)
-        frozen_revision = contract_data.get("frozen_baseline_revision", frozen_revision)
+    try:
+        eval_contract = Phase9EvaluationContract.load_yaml(contract_path)
+    except Exception:
+        print("ERROR: CONTRACT_LOAD_FAILED")
+        print("PHASE_9F_CORPUS_PREPARATION_REQUIRED")
+        return 1
+
+    min_docs = eval_contract.minimum_documents
+    min_layouts = eval_contract.minimum_layout_groups
+    frozen_revision = eval_contract.frozen_baseline_revision
 
     registry_path = Path(args.registry)
     if not registry_path.exists():
-        print(f"ERROR: Registry file {args.registry} does not exist.")
+        print("ERROR: REGISTRY_NOT_FOUND")
         print("PHASE_9F_CORPUS_PREPARATION_REQUIRED")
         return 1
 
@@ -68,11 +78,18 @@ def main() -> int:
         print(f"missing_audit_count: {report.missing_audit_count}")
         print(f"missing_family_count: {report.missing_family_count}")
         print(f"missing_layout_group_count: {report.missing_layout_group_count}")
+        print(f"duplicate_count: {report.duplicate_count}")
         return 1
 
     # Filter eligible candidates for manifest
     documents_list = []
+    seen_shas = set()
+
     for cand in registry.candidates:
+        sha_lower = cand.sha256.lower()
+        if sha_lower in seen_shas:
+            continue
+
         source_path = Path(cand.source_ref)
         audit_path = Path(cand.audit_ref) if cand.audit_ref else None
 
@@ -85,10 +102,9 @@ def main() -> int:
             and audit_path
             and audit_path.exists()
             and cand.family
-            and cand.family != "FAMILY_METADATA_MISSING"
             and cand.layout_group
-            and cand.layout_group != "LAYOUT_GROUP_METADATA_MISSING"
         ):
+            seen_shas.add(sha_lower)
             doc_entry = {
                 "alias": cand.alias,
                 "family": cand.family,
@@ -111,17 +127,17 @@ def main() -> int:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(yaml.safe_dump(manifest_data, sort_keys=False), encoding="utf-8")
 
-    # Validate output manifest using Phase9Manifest schema
+    # Validate output manifest using Phase9Manifest schema & Phase9EvaluationContract
     try:
-        Phase9Manifest.load_yaml(output_path)
-    except Exception as e:
-        print(f"ERROR: Generated manifest failed validation: {e}")
+        manifest_obj = Phase9Manifest.load_yaml(output_path)
+        eval_contract.validate_manifest(manifest_obj)
+    except Exception:
+        print("ERROR: MANIFEST_VALIDATION_FAILED")
         if output_path.exists():
             output_path.unlink()
         return 1
 
     print("PHASE_9F_MANIFEST_CREATED")
-    print(f"output_path: {args.output}")
     print(f"document_count: {len(documents_list)}")
     print(f"distinct_layout_groups: {report.distinct_layout_groups}")
     return 0

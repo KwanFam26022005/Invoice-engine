@@ -5,6 +5,9 @@ import hashlib
 import sys
 from pathlib import Path
 
+from pydantic import ValidationError
+
+from document_engine.core.models import DocumentFamilyType, PDFProfileType
 from document_engine.evaluation.phase9_corpus import (
     Phase9CorpusCandidate,
     Phase9CorpusRegistry,
@@ -46,17 +49,41 @@ def main() -> int:
 
     args = parser.parse_args()
 
+    # Validate workspace relative path first
+    try:
+        Phase9CorpusCandidate.validate_workspace_relative_ref(args.source)
+        if args.audit:
+            Phase9CorpusCandidate.validate_workspace_relative_ref(args.audit)
+    except ValueError:
+        print("ERROR: INVALID_WORKSPACE_PATH")
+        return 1
+
+    # Validate DocumentFamilyType enum
+    try:
+        DocumentFamilyType(args.family)
+    except ValueError:
+        print("ERROR: INVALID_FAMILY_TYPE")
+        return 1
+
+    # Validate PDFProfileType enum
+    if args.expected_profile is not None:
+        try:
+            PDFProfileType(args.expected_profile)
+        except ValueError:
+            print("ERROR: INVALID_PROFILE_TYPE")
+            return 1
+
     source_path = Path(args.source)
     if not source_path.exists() or not source_path.is_file():
-        print("ERROR: Source file does not exist.")
+        print("ERROR: SOURCE_NOT_FOUND")
         return 1
 
     if source_path.suffix.lower() != ".pdf":
-        print(f"ERROR: Source file must have .pdf extension, got '{source_path.suffix}'")
+        print("ERROR: INVALID_SOURCE_EXTENSION")
         return 1
 
     if args.cohort == "holdout_same_family" and args.used_for_prior_tuning:
-        print("ERROR: Document used for prior tuning cannot be registered into holdout_same_family cohort.")
+        print("ERROR: HOLDOUT_TUNING_REJECTED")
         return 1
 
     # Calculate SHA256
@@ -69,30 +96,35 @@ def main() -> int:
     # Check duplicates
     existing_sha = registry.find_by_sha256(sha256_hash)
     if existing_sha and existing_sha.alias != args.alias:
-        print("ERROR: Exact duplicate document already registered under a different alias.")
+        print("ERROR: DUPLICATE_DOCUMENT_REJECTED")
         return 1
 
     confirmed_count = 0
     audit_ref = args.audit
     if audit_ref:
         audit_path = Path(audit_ref)
-        if not audit_path.exists():
-            print("WARNING: Specified audit reference file does not exist yet.")
-        else:
+        if audit_path.exists():
             _, confirmed_count = count_audit_confirmed_fields(audit_path)
 
-    candidate = Phase9CorpusCandidate(
-        alias=args.alias,
-        source_ref=args.source,
-        audit_ref=audit_ref,
-        family=args.family,
-        cohort=args.cohort,
-        expected_profile=args.expected_profile,
-        layout_group=args.layout_group,
-        sha256=sha256_hash,
-        used_for_prior_tuning=args.used_for_prior_tuning,
-        audit_confirmed_field_count=confirmed_count,
-    )
+    try:
+        candidate = Phase9CorpusCandidate(
+            alias=args.alias,
+            source_ref=args.source,
+            audit_ref=audit_ref,
+            family=args.family,
+            cohort=args.cohort,
+            expected_profile=args.expected_profile,
+            layout_group=args.layout_group,
+            sha256=sha256_hash,
+            used_for_prior_tuning=args.used_for_prior_tuning,
+            audit_confirmed_field_count=confirmed_count,
+        )
+    except ValidationError as ve:
+        if "workspace-relative" in str(ve):
+            print("ERROR: INVALID_WORKSPACE_PATH")
+        else:
+            print(f"ERROR: REGISTRATION_FAILED ({type(ve).__name__})")
+        return 1
 
     registry.add_or_update_candidate(candidate)
     registry.save_yaml(registry_path)
