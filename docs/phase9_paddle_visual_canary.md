@@ -87,6 +87,8 @@ Phase 9E hardens the pre-existing Paddle worker before any real canary:
 
 The geometry coordinate system is recorded as `image_pixels_topleft` because PaddleOCR-VL layout results are image-space coordinates, not PDF-point coordinates.
 
+After the first real canary exposed a `TypeError`, revision `b02ba775d279802fb92382ed9f564d86c016c152` hardened live result mapping for `block_order=None`, missing block IDs, NumPy-like bounding boxes, malformed table indices, and privacy-safe coarse failure-stage diagnostics.
+
 ## Optional synthetic canary
 
 The real canary is intentionally opt-in and the filename does not match default pytest discovery:
@@ -114,6 +116,51 @@ Table recognition itself is measured but is not a hard pass criterion for this f
 
 No private corpus is used.
 
+## Operator real canary evidence — 2026-08-10
+
+The operator ran the controlled synthetic canary at revision:
+
+```text
+b02ba775d279802fb92382ed9f564d86c016c152
+```
+
+Observed result:
+
+```text
+1 passed in 280.12s (0:04:40)
+EXIT CODE: 0
+TOTAL SECONDS: 281.21
+TOTAL MINUTES: 4.69
+```
+
+The canary emitted these privacy-safe statistics:
+
+```json
+{
+  "block_count": 4,
+  "execution_time_seconds": 262.92577862739563,
+  "full_text_chars": 193,
+  "geometry_count": 4,
+  "page_count": 1,
+  "parser_id": "paddleocr_vl",
+  "parser_version": "3.7.0",
+  "private_corpus_used": false,
+  "table_count": 0
+}
+```
+
+Interpretation:
+
+- real local PaddleOCR-VL inference succeeded;
+- one `DocumentIR` page was produced;
+- visual blocks were produced;
+- geometry survived IR mapping;
+- provenance identified `paddleocr_vl` / PaddleOCR 3.7.0;
+- no private corpus was used;
+- `table_count=0` does not invalidate this first canary because table recognition was explicitly measured but was not a hard pass criterion.
+
+This satisfies the Phase 9E visual/layout canary gate.
+
 ## Verification order
 
 1. Sync the Phase 9 branch and run the normal lightweight/full code gates.
@@ -129,12 +176,10 @@ No private corpus is used.
 
 ## Status
 
-The API-inspection gate is complete. Phase 9E remains unverified until local model artifacts are prepared and a real synthetic visual inference succeeds.
+Phase 9E real visual/layout canary is verified at revision `b02ba775d279802fb92382ed9f564d86c016c152` using the operator-reported local run above.
 
-Allowed status labels:
+Current status:
 
-- `PHASE_9E_API_VERIFIED_MODEL_PREP_PENDING`
-- `PHASE_9E_MODEL_CACHE_NOT_READY`
-- `PHASE_9E_RUNTIME_BLOCKED`
-- `PHASE_9E_VISUAL_CANARY_PARTIAL`
 - `PHASE_9E_VISUAL_CANARY_VERIFIED`
+
+The next development phase is Phase 9F controlled A/B/C generalization evaluation. Phase 9F must compare the frozen independent paths before introducing a hybrid resolver.
