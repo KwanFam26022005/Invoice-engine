@@ -8,8 +8,10 @@ execution, and consumes only privacy-safe Phase 9F verification/observation data
 from __future__ import annotations
 
 from enum import Enum
+from pathlib import Path
 from typing import Any, Mapping
 
+import yaml
 from pydantic import BaseModel, Field
 
 from document_engine.evaluation.phase9f import (
@@ -59,6 +61,77 @@ class Phase9FPathBFallbackAcceptance(BaseModel):
     review_required: bool | None = None
     selected_parser: str
     private_values_persisted: bool = False
+
+
+class Phase9FPathBFallbackAcceptanceFreeze(BaseModel):
+    """Tracked privacy-safe freeze record for the controlled current-pilot fallback."""
+
+    acceptance_version: str = "1.0"
+    source_phase: str = "9F.2B.5"
+    alias: str
+    runtime_verdict: str
+    reason_code: str
+    selected_path: Phase9EvaluationPath
+    fallback_path: Phase9EvaluationPath
+    path_b_inference_executed: bool
+    path_a_executed: bool
+    fallback_verified: bool
+    routing_accepted: bool
+    fallback_execution_accepted: bool
+    predicted_family: str
+    family_match: bool | None = None
+    confirmed_field_count: int = Field(ge=0)
+    predicted_field_count: int = Field(ge=0)
+    normalized_match_count: int = Field(ge=0)
+    validation_pass: bool | None = None
+    review_required: bool | None = None
+    selected_parser: str
+    fallback_quality_disposition: FallbackQualityDisposition
+    fallback_quality_accepted: bool
+    semantic_path_b_quality_evaluable: bool
+    semantic_path_b_quality_accepted: bool
+    holdout_authorized: bool
+    generalization_claim_authorized: bool
+    private_values_persisted: bool = False
+
+    @classmethod
+    def load_yaml(cls, path: Path) -> "Phase9FPathBFallbackAcceptanceFreeze":
+        data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+        return cls.model_validate(data)
+
+    def validate_acceptance(self, acceptance: Phase9FPathBFallbackAcceptance) -> None:
+        comparable = {
+            "alias": acceptance.alias,
+            "runtime_verdict": acceptance.runtime_verdict,
+            "reason_code": acceptance.reason_code,
+            "selected_path": acceptance.selected_path,
+            "fallback_path": acceptance.fallback_path,
+            "path_b_inference_executed": acceptance.path_b_inference_executed,
+            "path_a_executed": acceptance.path_a_executed,
+            "fallback_verified": acceptance.fallback_verified,
+            "routing_accepted": acceptance.routing_accepted,
+            "fallback_execution_accepted": acceptance.fallback_execution_accepted,
+            "predicted_family": acceptance.predicted_family,
+            "family_match": acceptance.family_match,
+            "confirmed_field_count": acceptance.confirmed_field_count,
+            "predicted_field_count": acceptance.predicted_field_count,
+            "normalized_match_count": acceptance.normalized_match_count,
+            "validation_pass": acceptance.validation_pass,
+            "review_required": acceptance.review_required,
+            "selected_parser": acceptance.selected_parser,
+            "fallback_quality_disposition": acceptance.fallback_quality_disposition,
+            "fallback_quality_accepted": acceptance.fallback_quality_accepted,
+            "semantic_path_b_quality_evaluable": acceptance.semantic_path_b_quality_evaluable,
+            "semantic_path_b_quality_accepted": acceptance.semantic_path_b_quality_accepted,
+            "holdout_authorized": acceptance.holdout_authorized,
+            "generalization_claim_authorized": acceptance.generalization_claim_authorized,
+            "private_values_persisted": acceptance.private_values_persisted,
+        }
+        frozen = self.model_dump(
+            exclude={"acceptance_version", "source_phase"},
+        )
+        if comparable != frozen:
+            raise ValueError("PHASE_9F2B6_FREEZE_MISMATCH")
 
 
 def _quality_disposition(observation: Phase9FDocumentObservation) -> FallbackQualityDisposition:
