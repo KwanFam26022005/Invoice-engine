@@ -1,17 +1,18 @@
 """Phase 9F Path B runtime suitability policy.
 
 The policy is intentionally independent from semantic quality. A runtime can be
-healthy enough for a lightweight healthcheck while still being unsuitable for
-heavy semantic extraction. The current Phase 9F contract therefore keeps Path B
-available as an accelerator-backed canary, but routes CPU production execution to
-Path A after the controlled CPU timeout evidence is frozen.
+healthy enough for a lightweight healthcheck while still be unsuitable for heavy
+semantic extraction. Phase 9F therefore keeps Path B available as an accelerator
+canary while routing blocked CPU execution to deterministic Path A.
 """
 
 from __future__ import annotations
 
 from enum import Enum
+from pathlib import Path
 from typing import Any, Mapping, Optional
 
+import yaml
 from pydantic import BaseModel, Field
 
 from document_engine.evaluation.phase9f import Phase9EvaluationPath
@@ -22,6 +23,25 @@ class PathBRuntimeVerdict(str, Enum):
     CPU_EXECUTION_SUITABILITY_BLOCKED = "CPU_EXECUTION_SUITABILITY_BLOCKED"
     ACCELERATOR_CANARY_REQUIRED = "ACCELERATOR_CANARY_REQUIRED"
     ACCELERATOR_ACCEPTED = "ACCELERATOR_ACCEPTED"
+
+
+class Phase9FPathBRuntimePolicyConfig(BaseModel):
+    """Tracked machine-readable policy; contains no private document data."""
+
+    policy_version: str = "1.0"
+    fallback_path: Phase9EvaluationPath = Phase9EvaluationPath.A_DETERMINISTIC
+    cpu_canary_allowed: bool = False
+    cpu_production_allowed: bool = False
+    cpu_timeout_budgets_seconds: list[float] = Field(default_factory=list)
+    cpu_blocking_stage: Optional[str] = None
+    cuda_canary_allowed: bool = True
+    cuda_production_requires_acceptance: bool = True
+    semantic_canary_accepted: bool = False
+
+    @classmethod
+    def load_yaml(cls, path: Path) -> "Phase9FPathBRuntimePolicyConfig":
+        data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+        return cls.model_validate(data)
 
 
 class Phase9FPathBRuntimeEvidence(BaseModel):
@@ -88,9 +108,13 @@ def evidence_from_healthcheck(
     )
 
 
-def decide_path_b_runtime(evidence: Phase9FPathBRuntimeEvidence) -> Phase9FPathBRuntimeDecision:
+def decide_path_b_runtime(
+    evidence: Phase9FPathBRuntimeEvidence,
+    policy: Optional[Phase9FPathBRuntimePolicyConfig] = None,
+) -> Phase9FPathBRuntimeDecision:
     """Return the frozen Phase 9F runtime decision without judging model quality."""
 
+    policy = policy or Phase9FPathBRuntimePolicyConfig()
     if not evidence.runtime_ready:
         return Phase9FPathBRuntimeDecision(
             verdict=PathBRuntimeVerdict.RUNTIME_NOT_READY,
@@ -98,12 +122,17 @@ def decide_path_b_runtime(evidence: Phase9FPathBRuntimeEvidence) -> Phase9FPathB
             canary_allowed=False,
             production_allowed=False,
             semantic_quality_evaluable=False,
+            fallback_path=policy.fallback_path,
             reason_code="PATH_B_RUNTIME_PREFLIGHT_FAILED",
         )
 
     if evidence.actual_device == "cpu":
-        long_timeout_seen = any(budget >= 600.0 for budget in evidence.timed_out_budgets_seconds)
-        extraction_blocked = evidence.last_timeout_stage == "extraction_started"
+        long_timeout_seen = any(
+            budget >= 600.0 for budget in evidence.timed_out_budgets_seconds
+        )
+        extraction_blocked = (
+            evidence.last_timeout_stage == (policy.cpu_blocking_stage or "extraction_started")
+        )
         reason = (
             "CPU_EXTRACTION_TIMEOUT_CONFIRMED"
             if long_timeout_seen and extraction_blocked
@@ -112,28 +141,32 @@ def decide_path_b_runtime(evidence: Phase9FPathBRuntimeEvidence) -> Phase9FPathB
         return Phase9FPathBRuntimeDecision(
             verdict=PathBRuntimeVerdict.CPU_EXECUTION_SUITABILITY_BLOCKED,
             healthcheck_allowed=True,
-            canary_allowed=False,
-            production_allowed=False,
+            canary_allowed=policy.cpu_canary_allowed,
+            production_allowed=policy.cpu_production_allowed,
             semantic_quality_evaluable=False,
+            fallback_path=policy.fallback_path,
             reason_code=reason,
         )
 
     if evidence.actual_device == "cuda" and evidence.cuda_available:
-        if evidence.semantic_canary_accepted:
+        accepted = evidence.semantic_canary_accepted or policy.semantic_canary_accepted
+        if accepted:
             return Phase9FPathBRuntimeDecision(
                 verdict=PathBRuntimeVerdict.ACCELERATOR_ACCEPTED,
                 healthcheck_allowed=True,
-                canary_allowed=True,
+                canary_allowed=policy.cuda_canary_allowed,
                 production_allowed=True,
                 semantic_quality_evaluable=True,
+                fallback_path=policy.fallback_path,
                 reason_code="CUDA_CANARY_ACCEPTED",
             )
         return Phase9FPathBRuntimeDecision(
             verdict=PathBRuntimeVerdict.ACCELERATOR_CANARY_REQUIRED,
             healthcheck_allowed=True,
-            canary_allowed=True,
-            production_allowed=False,
-            semantic_quality_evaluable=True,
+            canary_allowed=policy.cuda_canary_allowed,
+            production_allowed=not policy.cuda_production_requires_acceptance,
+            semantic_quality_evaluable=policy.cuda_canary_allowed,
+            fallback_path=policy.fallback_path,
             reason_code="CUDA_CANARY_NOT_YET_ACCEPTED",
         )
 
@@ -143,5 +176,6 @@ def decide_path_b_runtime(evidence: Phase9FPathBRuntimeEvidence) -> Phase9FPathB
         canary_allowed=False,
         production_allowed=False,
         semantic_quality_evaluable=False,
+        fallback_path=policy.fallback_path,
         reason_code="UNSUPPORTED_PATH_B_DEVICE",
     )
